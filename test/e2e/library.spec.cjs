@@ -1,0 +1,57 @@
+const { test, expect, _electron: electron } = require('@playwright/test');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+
+test('import, thumbnail, typo search, hover playback, tags, resume and persistence', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'lvl-e2e-'));
+  const fixture = path.join(temp, '视频 素材'); await fs.mkdir(fixture);
+  const source = path.join(fixture, 'Javascript 海边日落.mp4');
+  execFileSync(require('ffmpeg-static'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12', '-t', '12', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-threads', '1', source]);
+  const env = { ...process.env, LVL_E2E: '1', LVL_DATA: path.join(temp, 'data'), LVL_FIXTURE: fixture };
+  delete env.ELECTRON_RUN_AS_NODE;
+  let application;
+  try {
+    application = await electron.launch({ args: [path.join(__dirname, '../..')], env });
+    let page = await application.firstWindow();
+    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    await page.locator('#add-folder').click();
+    await expect(page.locator('.card')).toHaveCount(1);
+    await expect(page.locator('.thumbnail img')).toBeVisible({ timeout: 60000 });
+    await expect.poll(() => page.locator('.thumbnail img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
+    await page.locator('#search').fill('Javscript');
+    await expect(page.locator('#heading')).toHaveText('搜索结果');
+    await expect(page.locator('.card')).toHaveCount(1);
+    await page.locator('.thumbnail').hover();
+    await expect(page.locator('.thumbnail video')).toBeVisible({ timeout: 60000 });
+    await expect.poll(() => page.locator('.thumbnail video').evaluate(video => video.currentTime)).toBeGreaterThan(0);
+    await page.locator('#heading').hover();
+    await expect(page.locator('.thumbnail video')).toHaveCount(0);
+    await page.locator('.favorite-button').click();
+    await expect(page.locator('#favorite-count')).toHaveText('1');
+    await page.locator('.card-title').click();
+    await expect(page.locator('#player-dialog')).toBeVisible();
+    await expect.poll(() => page.locator('#player').evaluate(video => video.currentTime)).toBeGreaterThan(0);
+    await page.locator('#player').evaluate(video => { video.currentTime = 4; video.pause(); });
+    await page.locator('#tags-input').fill('旅行, 风景');
+    await page.getByRole('button', { name: '保存标签', exact: true }).click();
+    await page.locator('#close-player').click();
+    await expect(page.locator('.tag-list')).toContainText('#旅行');
+    await page.locator('#search').fill('旅行');
+    await expect(page.locator('.card')).toHaveCount(1);
+    await application.close(); application = null;
+    application = await electron.launch({ args: [path.join(__dirname, '../..')], env });
+    page = await application.firstWindow();
+    await expect(page.locator('#favorite-count')).toHaveText('1');
+    await expect(page.locator('.tag-list')).toContainText('#风景');
+    await page.locator('.card-title').click();
+    await expect.poll(() => page.locator('#player').evaluate(video => video.currentTime)).toBeGreaterThanOrEqual(3);
+    await page.locator('#close-player').click();
+    await page.locator('.root-remove').click();
+    await page.locator('#confirm-remove').click();
+    await expect(page.locator('.card')).toHaveCount(0);
+    expect((await fs.stat(source)).size).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  } finally { if (application) await application.close(); await fs.rm(temp, { recursive: true, force: true }); }
+});

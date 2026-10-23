@@ -1,0 +1,34 @@
+{
+  "name": "local-video-library",
+  "version": "0.1.0",
+  "description": "拾影 — 本地视频整理器，面向 Windows 10/11",
+  "main": "electron/main.cjs",
+  "author": "Local Video Library contributors",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "test:e2e": "playwright test",
+    "dist:win": "electron-builder --win zip nsis --x64 --publish never"
+  },
+  "dependencies": {
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0",
+    "fuse.js": "7.5.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.localvideolibrary",
+    "productName": "Local Video Library",
+    "directories": { "output": "dist" },
+    "files": ["electron/**/*", "src/**/*", "package.json", "LICENSE"],
+    "asarUnpack": ["node_modules/ffmpeg-static/**", "node_modules/ffprobe-static/**"],
+    "win": { "target": ["zip", "nsis"], "artifactName": "LocalVideoLibrary-${version}-win-${arch}.${ext}", "signAndEditExecutable": false },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "deleteAppDataOnUninstall": false }
+  }
+}

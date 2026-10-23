@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' media:; media-src media:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>拾影 · 本地视频库</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/fuse.js"></script>
+  <script defer src="/search.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">▶</span><div>拾影<small>LOCAL VIDEO LIBRARY</small></div></div>
+    <button id="add-folder" class="primary add">＋ 添加视频文件夹</button>
+    <p class="nav-heading">我的视频库</p>
+    <nav class="views">
+      <button data-view="all" class="selected"><span>▦　全部视频</span><b id="all-count">0</b></button>
+      <button data-view="favorite"><span>♡　我的收藏</span><b id="favorite-count">0</b></button>
+      <button data-view="recent"><span>◷　最近播放</span></button>
+    </nav>
+    <div class="nav-heading folder-heading">文件夹 <span id="root-count">0</span></div>
+    <div id="roots" class="roots"></div>
+    <div class="sidebar-bottom"><span class="online-dot"></span> 本地存储 · 离线使用<small>Windows 10 / 11 · v0.1.0</small></div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div class="searchbox"><span>⌕</span><input id="search" type="search" placeholder="搜索视频、文件夹或标签…" aria-label="搜索视频"><kbd>Ctrl K</kbd></div>
+      <button id="rescan" class="secondary">↻ 重新扫描</button>
+    </header>
+    <section class="collection-header"><div><p class="eyebrow">YOUR PERSONAL COLLECTION</p><h1 id="heading">全部视频</h1><p id="summary">把硬盘里的视频，变成自己的影库。</p></div><label class="preview-setting"><input id="hover-enabled" type="checkbox" checked> 悬停预览</label></section>
+    <div class="toolbar"><div class="chips"><button class="chip active" data-kind="all">全部格式</button><button class="chip" data-kind="mp4">MP4</button><button class="chip" data-kind="mkv">MKV</button><button class="chip" data-kind="other">其他</button></div><label>排序 <select id="sort"><option value="relevance">相关度 / 最近添加</option><option value="name">名称 A → Z</option><option value="modified">最近修改</option><option value="size">文件从大到小</option></select></label></div>
+    <div id="scan-status" role="status" hidden><span id="scan-message"></span><button id="cancel-scan" class="text-button" hidden>停止扫描</button></div>
+    <section id="empty" class="empty"><div class="empty-art">▷</div><h2>你的私人放映室，从这里开始</h2><p>添加一个视频文件夹，自动整理成封面墙。<br>搜索、悬停预览，随时找到想看的那一部。</p><button id="empty-add" class="primary">＋ 添加视频文件夹</button><small>视频保留在原来的位置，仅在本机建立索引</small></section>
+    <section id="no-results" class="empty" hidden><div class="empty-art">⌕</div><h2>没有找到匹配的视频</h2><p>试试更短的关键词，或切换文件夹和格式筛选。</p><button id="clear-filters" class="secondary">清除筛选</button></section>
+    <section id="grid" class="grid" aria-label="视频列表"></section>
+    <footer class="pagination" id="pagination" hidden><span id="result-count"></span><div><button id="prev-page" class="secondary">← 上一页</button><span id="page-label"></span><button id="next-page" class="secondary">下一页 →</button></div></footer>
+  </main>
+  <dialog id="player-dialog" class="player-dialog"><div class="player-top"><div><h2 id="player-title"></h2><p id="player-folder"></p></div><button id="close-player" class="icon-button" aria-label="关闭播放器">✕</button></div><div class="player-stage"><video id="player" controls preload="metadata"></video><div id="playback-error" hidden><p>这个视频暂时无法内置播放，或文件已离线。</p><button id="fallback-open" class="primary">用系统播放器打开</button></div></div><div class="player-bottom"><button id="player-favorite" class="secondary">♡ 收藏</button><button id="reveal" class="secondary">打开所在文件夹</button><button id="external-open" class="secondary">系统播放器 ↗</button><span id="player-info"></span></div><form id="tags-form" class="tags-form"><label for="tags-input">视频标签</label><input id="tags-input" placeholder="例如：旅行, 教程, 待看（逗号分隔）" maxlength="1500"><button type="submit" class="secondary">保存标签</button></form></dialog>
+  <dialog id="remove-dialog" class="confirm-dialog"><h2>从视频库移除文件夹？</h2><p id="remove-path"></p><p>原始视频不会删除。此文件夹的收藏、标签和观看记录会从索引中移除。</p><div><button id="cancel-remove" class="secondary">取消</button><button id="confirm-remove" class="primary">移除文件夹</button></div></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
