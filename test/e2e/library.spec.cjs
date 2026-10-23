@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
-test('import, thumbnail, typo search, hover playback, tags, resume and persistence', async () => {
+test('import, thumbnail, typo search, hover playback, tags, resume and persistence', async ({}, testInfo) => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'lvl-e2e-'));
   const fixture = path.join(temp, '视频 素材'); await fs.mkdir(fixture);
   const source = path.join(fixture, 'Javascript 海边日落.mp4');
@@ -15,11 +15,12 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
   try {
     application = await electron.launch({ args: [path.join(__dirname, '../..')], env });
     let page = await application.firstWindow();
-    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    const errors = []; page.on('pageerror', error => { errors.push(error.message); console.error('Renderer error:', error.message); });
     await page.locator('#add-folder').click();
     await expect(page.locator('.card')).toHaveCount(1);
     await expect(page.locator('.thumbnail img')).toBeVisible({ timeout: 60000 });
     await expect.poll(() => page.locator('.thumbnail img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
+    await page.screenshot({ path: testInfo.outputPath('windows-library.png') });
     await page.locator('#search').fill('Javscript');
     await expect(page.locator('#heading')).toHaveText('搜索结果');
     await expect(page.locator('.card')).toHaveCount(1);

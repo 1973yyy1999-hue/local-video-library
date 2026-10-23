@@ -14,7 +14,7 @@ protocol.registerSchemesAsPrivileged([
 let window, library, media;
 const isTest = !app.isPackaged && process.env.LVL_E2E === '1';
 if (isTest && process.env.LVL_DATA) app.setPath('userData', process.env.LVL_DATA);
-const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.ogv': 'video/ogg' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.ogv': 'video/ogg' };
 async function fileResponse(file, request) {
   const stat = await fs.stat(file);
   const range = parseRange(request.headers.get('range'), stat.size);
@@ -49,7 +49,7 @@ async function start() {
     ['/app.js', path.join(__dirname, '../src/app.js')],
     ['/styles.css', path.join(__dirname, '../src/styles.css')],
     ['/search.js', path.join(__dirname, '../src/search.js')],
-    ['/fuse.js', require.resolve('fuse.js').replace(/fuse\.cjs$/, 'fuse.min.js')]
+    ['/fuse.mjs', require.resolve('fuse.js').replace(/\.cjs$/, '.mjs')]
   ]);
   protocol.handle('app', async request => {
     const url = new URL(request.url);

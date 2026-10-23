@@ -1,3 +1,6 @@
+import Fuse from '/fuse.mjs';
+import './search.js';
+
 const $ = selector => document.querySelector(selector);
 const api = window.libraryAPI;
 let state = { roots: [], videos: [], status: {} }, view = 'all', rootId = '', kind = 'all', page = 1;
@@ -86,7 +89,7 @@ function card(item) {
 function render() {
   stopPreview(); observer?.disconnect(); const batch = ++generation;
   const query = $('#search').value.trim();
-  if (!searchCache || searchCache.query !== query) searchCache = { query, items: window.searchVideos(state.videos, query, window.Fuse) };
+  if (!searchCache || searchCache.query !== query) searchCache = { query, items: window.searchVideos(state.videos, query, Fuse) };
   let items = searchCache.items.filter(video => (!rootId || video.rootId === rootId) && (view !== 'favorite' || video.favorite) && (view !== 'recent' || video.lastPlayed) && (kind === 'all' || (kind === 'other' ? !['mp4', 'mkv'].includes(video.extension) : video.extension === kind)));
   const sort = $('#sort').value;
   if (sort === 'name') items.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true }));
