@@ -44,7 +44,7 @@
 需要 Node.js 22 或更新的受支持版本，以及 npm。
 
 ```sh
-npm install
+npm ci
 npm start
 ```
 
@@ -54,7 +54,7 @@ npm run test:e2e  # 启动真实 Electron，验证导入、预览、播放、收
 npm run dist:win  # 在 Windows 上生成 x64 ZIP 和 NSIS 安装包
 ```
 
-开发依赖第一次安装会下载 Electron 和 FFmpeg，需要访问 npm 与 GitHub。当前顶层依赖固定了版本；首次尚未生成依赖锁文件，后续成功安装后应将 `package-lock.json` 提交并将 CI 改为 `npm ci`。
+开发依赖第一次安装会下载 Electron 和 FFmpeg，需要访问 npm 与 GitHub。仓库已提交 Windows 构建实际生成的 `package-lock.json`，CI 使用 `npm ci` 按锁定版本安装。
 
 ## 自动构建与发布
 
