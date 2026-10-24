@@ -118,6 +118,7 @@ class Library {
         const stack = [root.path];
         while (stack.length && !this.cancelled) {
           while (this.playing && !this.cancelled) await new Promise(resolve => setTimeout(resolve, 250));
+          if (this.cancelled) break;
           const folder = stack.pop();
           let entries;
           try { entries = await fs.readdir(folder, { withFileTypes: true }); }
@@ -128,6 +129,7 @@ class Library {
             continue;
           }
           for (const entry of entries) {
+            while (this.playing && !this.cancelled) await new Promise(resolve => setTimeout(resolve, 250));
             if (this.cancelled) break;
             if (entry.isSymbolicLink()) continue;
             const full = path.join(folder, entry.name);

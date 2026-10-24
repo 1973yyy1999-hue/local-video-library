@@ -142,3 +142,13 @@ test('truncated journal recovers intact batches and keeps subsequent writes repl
   await reopened.update(video.id, { tags: ['kept'] });
   const final = new Library(library.directory); await final.load(); assert.deepEqual(final.get(video.id).tags, ['kept']);
 });
+
+test('checkpoint recovery does not replay already incorporated journal records', async t => {
+  const { library } = await fixture(t); await library.scan(); const video = library.state.videos[0];
+  await library.update(video.id, { favorite: true });
+  const oldJournal = await fs.readFile(library.store.journal, 'utf8');
+  await library.update(video.id, { favorite: false }); await library.save();
+  // Simulate a crash after publishing the snapshot, before truncating the old log.
+  await fs.writeFile(library.store.journal, oldJournal);
+  const reopened = new Library(library.directory); await reopened.load(); assert.equal(reopened.get(video.id).favorite, false);
+});

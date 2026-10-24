@@ -7,7 +7,7 @@ class Store {
   constructor(directory, onError = () => {}) {
     this.file = path.join(directory, 'library.json');
     this.journal = path.join(directory, 'changes.jsonl');
-    this.dirty = new Map(); this.queue = Promise.resolve(); this.onError = onError; this.journalBytes = 0;
+    this.dirty = new Map(); this.queue = Promise.resolve(); this.onError = onError; this.journalBytes = 0; this.sequence = 0;
   }
   async read() {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
@@ -29,6 +29,8 @@ class Store {
         recovery = '索引异常，已从备份恢复；损坏文件已保留。请重新扫描以补全最近新增的视频。';
       }
     }
+    this.sequence = Number.isSafeInteger(data.journalSequence) ? data.journalSequence : 0;
+    const snapshotSequence = this.sequence;
     const records = new Map(data.videos.map((video, index) => [video?.id || `invalid-${index}`, video]));
     try {
       const text = await fs.readFile(this.journal, 'utf8'); this.journalBytes = Buffer.byteLength(text);
@@ -36,9 +38,12 @@ class Store {
       for (let index = 0; index < lines.length; index++) {
         if (!lines[index]) continue;
         try {
-          const updates = JSON.parse(lines[index]);
-          if (!Array.isArray(updates)) throw new Error('无效的增量记录');
-          for (const update of updates) {
+          const parsed = JSON.parse(lines[index]);
+          const updates = Array.isArray(parsed) ? parsed : parsed.updates;
+          const sequence = Array.isArray(parsed) ? ++this.sequence : parsed.sequence;
+          if (!Array.isArray(updates) || !Number.isSafeInteger(sequence)) throw new Error('无效的增量记录');
+          this.sequence = Math.max(this.sequence, sequence);
+          for (const update of sequence > snapshotSequence ? updates : []) {
             if (!update.patch || typeof update.patch !== 'object') continue;
             if (records.has(update.id)) Object.assign(records.get(update.id), update.patch);
             else if (update.patch.id === update.id) records.set(update.id, update.patch);
@@ -68,7 +73,7 @@ class Store {
     if (!batch.length) return this.queue;
     return this.enqueue(async () => {
       try {
-        const line = `${JSON.stringify(batch)}\n`;
+        const line = `${JSON.stringify({ sequence: ++this.sequence, updates: batch })}\n`;
         await fs.appendFile(this.journal, line, 'utf8'); this.journalBytes += Buffer.byteLength(line);
         if (this.journalBytes >= 8 * 1024 * 1024 && this.getState) await this.checkpoint(this.getState);
       }
@@ -83,14 +88,14 @@ class Store {
     return this.enqueue(() => this.checkpoint(getState));
   }
   async checkpoint(getState) {
-      const text = JSON.stringify(getState());
+      const text = JSON.stringify({ ...getState(), journalSequence: this.sequence });
       const temp = `${this.file}.tmp`;
       await fs.writeFile(temp, text, 'utf8');
-      try { await fs.copyFile(this.file, `${this.file}.bak`); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await fs.writeFile(`${this.file}.bak.tmp`, text, 'utf8');
       await fs.rename(temp, this.file);
+      await fs.rename(`${this.file}.bak.tmp`, `${this.file}.bak`);
+      // Sequence numbers make recovery safe even if a crash occurs before truncation.
       await fs.writeFile(this.journal, '', 'utf8'); this.journalBytes = 0;
-      // A first snapshot must also have a recoverable backup.
-      try { await fs.access(`${this.file}.bak`); } catch { await fs.copyFile(this.file, `${this.file}.bak`); }
   }
 }
 module.exports = { Store };

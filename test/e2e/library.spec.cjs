@@ -47,7 +47,7 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
     expect(menu).toContain('用系统默认播放器播放（PotPlayer）');
     await application.evaluate(({ shell }) => { shell.openPath = async file => { globalThis.__openedFile = file; return ''; }; });
     await page.locator('#external-open').click();
-    await expect.poll(() => application.evaluate(() => globalThis.__openedFile)).toBe(source);
+    await expect.poll(() => application.evaluate(() => globalThis.__openedFile)).toBe(await fs.realpath(source));
     await page.locator('#player').evaluate(video => { video.currentTime = 4; video.pause(); });
     await page.locator('#tags-input').fill('旅行, 风景');
     await page.getByRole('button', { name: '保存标签', exact: true }).click();
