@@ -1,14 +1,15 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const invoke = channel => (...args) => ipcRenderer.invoke(channel, ...args);
+const invoke = channel => (...args) => ipcRenderer.invoke(`library:${channel}`, ...args);
 contextBridge.exposeInMainWorld('libraryAPI', {
-  snapshot: invoke('library:snapshot'), addFolder: invoke('library:add-folder'),
-  removeFolder: invoke('library:remove-folder'), scan: invoke('library:scan'), cancelScan: invoke('library:cancel'),
-  update: invoke('library:update'), reveal: invoke('library:reveal'), openExternal: invoke('library:open-external'),
-  prepare: invoke('library:prepare'),
+  snapshot: invoke('snapshot'), addFolder: invoke('add-folder'), relocateFolder: invoke('relocate-folder'),
+  removeFolder: invoke('remove-folder'), scan: invoke('scan'), cancelScan: invoke('cancel'),
+  update: invoke('update'), reveal: invoke('reveal'), openExternal: invoke('open-external'),
+  prepare: invoke('prepare'), cancelMedia: invoke('cancel-media'), playing: invoke('playing'),
+  contextMenu: invoke('context-menu'), fullscreen: invoke('fullscreen'), flush: invoke('flush'),
+  settings: invoke('settings'), saveSettings: invoke('save-settings'), clearCache: invoke('clear-cache'), moveCache: invoke('move-cache'), quitReady: invoke('quit-ready'),
   on: (name, callback) => {
-    if (!['scan-progress', 'library-changed'].includes(name)) return () => {};
-    const listener = (_event, data) => callback(data);
-    ipcRenderer.on(name, listener);
+    if (!['scan-progress', 'scan-batch', 'library-changed', 'video-changed', 'storage-error', 'media-retry', 'player-action', 'prepare-quit', 'fullscreen-changed'].includes(name)) return () => {};
+    const listener = (_event, data) => callback(data); ipcRenderer.on(name, listener);
     return () => ipcRenderer.removeListener(name, listener);
   }
 });

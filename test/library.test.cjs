@@ -86,9 +86,59 @@ test('media access rejects records outside registered roots and path prefix sibl
   const video = library.state.videos[0]; video.path = outside;
   await assert.rejects(library.verifiedPath(video.id), /不在已添加/);
 });
-test('invalid JSON is preserved rather than silently overwriting user metadata', async t => {
+test('invalid JSON without a backup is preserved rather than silently overwritten', async t => {
   const { library } = await fixture(t);
+  await fs.unlink(`${library.file}.bak`);
   await fs.writeFile(library.file, 'broken data');
   await assert.rejects(new Library(library.directory).load(), /原文件已保留/);
   assert.equal(await fs.readFile(library.file, 'utf8'), 'broken data');
+});
+
+test('damaged main index recovers a backup and retains damaged evidence', async t => {
+  const { library } = await fixture(t); await library.scan(); await library.save();
+  await fs.writeFile(library.file, '{broken');
+  const reopened = new Library(library.directory); await reopened.load();
+  assert.equal(reopened.state.videos.length, 2);
+  assert.match(reopened.recovery, /备份恢复/);
+  const files = await fs.readdir(library.directory);
+  assert.ok(files.some(name => name.startsWith('library.json.damaged-')));
+});
+test('folder relocation preserves identity, favorites, progress and cached fingerprint', async t => {
+  const { library, root } = await fixture(t); await library.scan();
+  const video = library.state.videos[0], fingerprint = video.fingerprint;
+  await library.update(video.id, { favorite: true, position: 42, tags: ['旅行'] });
+  const moved = `${root}-moved`; await fs.rename(root, moved);
+  await library.relocateRoot(library.state.roots[0].id, moved); await library.scan();
+  const relocated = library.get(video.id);
+  assert.equal(relocated.favorite, true); assert.equal(relocated.position, 42);
+  assert.equal(relocated.fingerprint, fingerprint); assert.ok(relocated.path.startsWith(await fs.realpath(moved)));
+});
+test('scan publishes usable batches before finishing and keeps metadata edits', async t => {
+  const { library, root } = await fixture(t);
+  for (let i = 0; i < 105; i++) await fs.writeFile(path.join(root, `clip-${i}.mp4`), 'x');
+  let sawBatch = false, edited;
+  library.notify = (name, batch) => {
+    if (name === 'scan-batch' && !sawBatch) {
+      sawBatch = true; assert.equal(library.scanning, true); assert.ok(library.state.videos.length >= 100);
+      edited = batch[0].id; library.patch(edited, { favorite: true });
+    }
+  };
+  await library.scan(); assert.ok(sawBatch); assert.equal(library.get(edited).favorite, true);
+});
+test('routine progress writes do not rewrite or serialize the whole index', async t => {
+  const { library } = await fixture(t); await library.scan();
+  const original = await fs.readFile(library.file, 'utf8'), video = library.state.videos[0];
+  for (let i = 0; i < 100; i++) await library.update(video.id, { position: i });
+  await library.flush();
+  assert.equal(await fs.readFile(library.file, 'utf8'), original);
+  const journal = await fs.readFile(library.store.journal, 'utf8');
+  assert.equal(journal.trim().split('\n').length, 1); assert.ok(journal.length < 3000);
+  const reopened = new Library(library.directory); await reopened.load(); assert.equal(reopened.get(video.id).position, 99);
+});
+test('truncated journal recovers intact batches and keeps subsequent writes replayable', async t => {
+  const { library } = await fixture(t); await library.scan(); const video = library.state.videos[0];
+  await library.update(video.id, { favorite: true }); await fs.appendFile(library.store.journal, '{partial');
+  const reopened = new Library(library.directory); await reopened.load(); assert.equal(reopened.get(video.id).favorite, true);
+  await reopened.update(video.id, { tags: ['kept'] });
+  const final = new Library(library.directory); await final.load(); assert.deepEqual(final.get(video.id).tags, ['kept']);
 });
