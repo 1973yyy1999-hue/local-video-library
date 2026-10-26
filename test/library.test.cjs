@@ -152,3 +152,31 @@ test('checkpoint recovery does not replay already incorporated journal records',
   await fs.writeFile(library.store.journal, oldJournal);
   const reopened = new Library(library.directory); await reopened.load(); assert.equal(reopened.get(video.id).favorite, false);
 });
+
+test('relocation rejects empty and mismatched folders without changing any paths', async t => {
+  const { library, temp } = await fixture(t); await library.scan();
+  const before = JSON.stringify(library.state), rootId = library.state.roots[0].id;
+  const empty = path.join(temp, 'wrong'); await fs.mkdir(empty);
+  await assert.rejects(library.relocateRoot(rootId, empty), /没有匹配/);
+  assert.equal(JSON.stringify(library.state), before);
+  await fs.writeFile(path.join(empty, '教程.mkv'), 'wrong-size');
+  await assert.rejects(library.relocateRoot(rootId, empty), /内容不匹配/);
+  assert.equal(JSON.stringify(library.state), before);
+});
+test('relocation preview reports partial matches and never mutates the library', async t => {
+  const { library, temp } = await fixture(t); await library.scan();
+  const before = JSON.stringify(library.state), folder = path.join(temp, 'partial'); await fs.mkdir(folder);
+  await fs.writeFile(path.join(folder, '教程.mkv'), 'video2');
+  const match = await library.inspectRelocation(library.state.roots[0].id, folder);
+  assert.equal(match.matched, 1); assert.equal(match.total, 2); assert.equal(JSON.stringify(library.state), before);
+});
+test('pre-scan history survives an empty completed scan and can restore user records', async t => {
+  const { library } = await fixture(t); await library.scan();
+  const id = library.state.videos[0].id; await library.update(id, { favorite: true, watched: true, position: 50 });
+  for (const video of library.state.videos) await fs.unlink(video.path);
+  await library.scan(); assert.equal(library.state.videos.length, 0);
+  const history = await library.store.readHistory(); assert.equal(history.state.videos.length, 2);
+  await library.restoreHistory(); assert.equal(library.get(id).favorite, true); assert.equal(library.get(id).watched, true); assert.equal(library.get(id).position, 50);
+  await library.scan(); await library.scan();
+  const files = await fs.readdir(library.directory); assert.equal(files.filter(file => /history-\d+\.gz$/.test(file)).length, 2);
+});

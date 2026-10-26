@@ -70,7 +70,7 @@ class Library {
       if (root) { video.rootId = root.id; video.folder = path.relative(root.path, path.dirname(video.path)) || root.name; }
     }
   }
-  async relocateRoot(id, folder) {
+  async inspectRelocation(id, folder) {
     if (this.scanning) throw new Error('请先停止扫描');
     const root = this.state.roots.find(item => item.id === id);
     if (!root) throw new Error('找不到文件夹');
@@ -81,9 +81,16 @@ class Library {
     for (const video of this.state.videos.filter(item => item.rootId === id)) {
       const next = path.join(full, path.relative(root.path, video.path));
       let online = false;
-      try { const stat = await fs.stat(next); if (stat.size !== video.size) throw new Error('文件大小不一致'); online = true; } catch (error) { if (error.code !== 'ENOENT') throw new Error('新文件夹内容不匹配，请选择原文件夹的新位置'); }
+      try { const stat = await fs.stat(next); if (!stat.isFile() || stat.size !== video.size) throw new Error('文件大小不一致'); online = true; } catch (error) { if (error.code !== 'ENOENT') throw new Error('新文件夹内容不匹配，请选择原文件夹的新位置'); }
       updates.push({ video, next, online });
     }
+    const matched = updates.filter(item => item.online).length;
+    if (updates.length && !matched) throw new Error('没有匹配到任何视频，未修改原路径。请选择原来源文件夹的新位置');
+    return { root, full, updates, matched, total: updates.length };
+  }
+  async relocateRoot(id, folder) {
+    const { root, full, updates } = await this.inspectRelocation(id, folder);
+    await this.store.captureHistory(() => this.state);
     for (const { video, next, online } of updates) Object.assign(video, { path: next, online });
     root.path = full; root.name = path.basename(full) || full; root.online = true;
     this.assignRoots(); this.reindex(); await this.save();
@@ -112,6 +119,7 @@ class Library {
     const found = new Map();
     const incomplete = [];
     try {
+      await this.store.captureHistory(() => this.state);
       for (const root of this.state.roots) {
         if (this.cancelled) break;
         root.online = true;
@@ -171,7 +179,7 @@ class Library {
       for (const video of found.values()) {
         const latest = old.get(video.id);
         if (!latest) continue;
-        for (const field of ['favorite', 'tags', 'position', 'lastPlayed']) video[field] = latest[field];
+        for (const field of ['favorite', 'tags', 'position', 'lastPlayed', 'watched']) video[field] = latest[field];
         if (latest.fingerprint === video.fingerprint) {
           for (const field of ['duration', 'width', 'height']) if (latest[field] !== undefined) video[field] = latest[field];
         }
@@ -193,6 +201,15 @@ class Library {
     const video = this.byId.get(id);
     if (!video) throw new Error('找不到这个视频，请重新扫描');
     return video;
+  }
+  async restoreHistory() {
+    if (this.scanning || this.playing) throw new Error('请先停止扫描并关闭播放器');
+    const previous = await this.store.readHistory();
+    await this.store.captureHistory(() => this.state, true);
+    const current = this.state;
+    this.state = previous.state; this.reindex();
+    try { await this.save(); } catch (error) { this.state = current; this.reindex(); throw error; }
+    this.notify('library-changed');
   }
   async verifiedPath(id) {
     const video = this.get(id);

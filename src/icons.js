@@ -1,4 +1,6 @@
 const paths = {
+  minus: ['M5 12h14'], maximize: ['M5 5h14v14H5z'], restore: ['M8 4h12v12M4 8h12v12H4z'],
+  check: ['m5 12 4 4L19 6'], tag: ['M3 3h8l10 10-8 8L3 11Z', 'M7 7h.01'], copy: ['M8 8h12v13H8z', 'M4 16H2V2h13v2'],
   play: ['m9 5 11 7-11 7z'], library: ['M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'],
   heart: ['M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z'],
   clock: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z', 'M12 7v5l3 2'],

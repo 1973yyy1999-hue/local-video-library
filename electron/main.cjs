@@ -8,6 +8,7 @@ const { Library } = require('./library.cjs');
 const { Media } = require('./media.cjs');
 const { Cache, MB } = require('./cache.cjs');
 const { parseRange } = require('./range.cjs');
+const { randomUUID } = require('node:crypto');
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: 'media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
@@ -15,6 +16,7 @@ protocol.registerSchemesAsPrivileged([
 // Avoid a second unbounded browser disk cache beside the explicitly capped media cache.
 app.commandLine.appendSwitch('disable-http-cache');
 let window, library, media, settings, scanPromise, quitting = false, quitReady;
+let relocation;
 const isTest = !app.isPackaged && process.env.LVL_E2E === '1';
 if (isTest && process.env.LVL_DATA) app.setPath('userData', process.env.LVL_DATA);
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.ogv': 'video/ogg' };
@@ -44,7 +46,7 @@ async function saveSettings() {
 }
 function scan() {
   if (library.scanning) return;
-  scanPromise = library.scan().catch(report).finally(() => { media.drain(); media.cache.trim(0, new Set(library.state.videos.map(video => video.fingerprint))).catch(report); });
+  scanPromise = library.scan().catch(report).finally(() => { media.withCache(() => media.cache.trim(media.reserved, new Set(library.state.videos.map(video => video.fingerprint)))).catch(report); media.drain(); });
 }
 async function external(id, custom = false) {
   const file = await library.verifiedPath(id);
@@ -57,7 +59,7 @@ async function external(id, custom = false) {
   } else { const error = await shell.openPath(file); if (error) throw new Error(error); }
 }
 async function selectPlayer() {
-  const result = await dialog.showOpenDialog(window, { title: '选择 PotPlayer 或其他播放器', properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: '播放器程序', extensions: ['exe'] }] : [] });
+  const result = await dialog.showOpenDialog(window, { title: '选择已安装的播放器', properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: '播放器程序', extensions: ['exe'] }] : [] });
   if (!result.canceled) { settings.playerPath = result.filePaths[0]; await saveSettings(); }
   return settings.playerPath || '';
 }
@@ -70,12 +72,14 @@ async function start() {
     for (const file of [library.file, library.store.journal]) await fs.rename(file, `${file}.damaged-${Date.now()}`).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await library.load();
   }
-  settings = { cacheLimitMB: 512, autoScan: false, playerPath: '' };
+  settings = { cacheLimitMB: 512, autoScan: false, playerPath: '', concurrency: 1, theme: 'system' };
   try { Object.assign(settings, JSON.parse(await fs.readFile(path.join(library.directory, 'settings.json'), 'utf8'))); } catch {}
   if (![128, 256, 512, 1024, 2048].includes(settings.cacheLimitMB)) settings.cacheLimitMB = 512;
+  if (![1, 2, 4].includes(settings.concurrency)) settings.concurrency = 1;
+  if (!['system', 'light', 'dark'].includes(settings.theme)) settings.theme = 'system';
   const defaultCache = process.platform === 'win32' && !isTest ? path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'LocalVideoLibrary', 'MediaCache') : path.join(library.directory, 'cache');
   settings.cacheDirectory = typeof settings.cacheDirectory === 'string' ? settings.cacheDirectory : defaultCache;
-  media = new Media(library, { directory: settings.cacheDirectory, limitMB: settings.cacheLimitMB });
+  media = new Media(library, { directory: settings.cacheDirectory, limitMB: settings.cacheLimitMB, concurrency: settings.concurrency });
   await media.cache.load();
   // Consolidate v0.1 roaming cache under the same quota; never leave two copies.
   const legacy = path.join(library.directory, 'cache');
@@ -90,7 +94,7 @@ async function start() {
     await media.cache.load();
   }
   await media.cache.trim(0, new Set(library.state.videos.map(video => video.fingerprint)));
-  const assets = new Map(['index.html', 'app.js', 'styles.css', 'search.js', 'icons.js', 'format.js', 'icon.svg'].map(name => [`/${name}`, path.join(__dirname, '../src', name)]));
+  const assets = new Map(['index.html', 'app.js', 'styles.css', 'search.js', 'icons.js', 'format.js', 'icon.svg', 'visible-queue.js', 'menus.js'].map(name => [`/${name}`, path.join(__dirname, '../src', name)]));
   assets.set('/', assets.get('/index.html')); assets.set('/fuse.mjs', require.resolve('fuse.js').replace(/\.cjs$/, '.mjs'));
   protocol.handle('app', async request => {
     try { const url = new URL(request.url), file = url.hostname === 'library' && assets.get(url.pathname);
@@ -122,8 +126,17 @@ async function start() {
     return results;
   });
   handle('relocate-folder', async id => {
+    relocation = null;
     const result = await dialog.showOpenDialog(window, { title: '选择这个来源文件夹的新位置（保留相对目录结构）', properties: ['openDirectory'] });
-    if (!result.canceled) { await library.relocateRoot(id, result.filePaths[0]); send('library-changed'); }
+    if (result.canceled) return null;
+    const match = await library.inspectRelocation(id, result.filePaths[0]);
+    relocation = { id, path: match.full, token: randomUUID() };
+    return { token: relocation.token, path: match.full, matched: match.matched, total: match.total };
+  });
+  handle('confirm-relocation', async token => {
+    if (!relocation || token !== relocation.token) throw new Error('确认已失效，请重新选择文件夹');
+    const selected = relocation; relocation = null;
+    await library.relocateRoot(selected.id, selected.path); send('library-changed');
   });
   handle('remove-folder', id => library.removeRoot(id));
   handle('scan', () => { scan(); return true; });
@@ -133,35 +146,68 @@ async function start() {
   handle('playing', playing => { if (typeof playing !== 'boolean') throw new Error('无效状态'); media.setPlaying(playing); });
   handle('cancel-media', () => media.cancelQueued());
   handle('prepare', async (id, kind) => {
-    await media.asset(id, kind); const video = library.get(id);
-    return { duration: video.duration, width: video.width, height: video.height, url: `media://${kind}/${id}?v=${video.fingerprint}` };
+    try {
+      await media.asset(id, kind); const video = library.get(id);
+      return { duration: video.duration, width: video.width, height: video.height, url: `media://${kind}/${id}?v=${video.fingerprint}` };
+    } catch (error) {
+      const failure = library.get(id).mediaFailures?.[kind];
+      return { error: error.message, cancelled: !!error.cancelled, retryAt: failure?.retryAt || 0, permanent: !!failure?.permanent };
+    }
   });
   handle('reveal', async id => shell.showItemInFolder(await library.verifiedPath(id)));
   handle('open-external', external);
   handle('context-menu', id => {
     const video = library.get(id);
-    const act = action => () => Promise.resolve().then(action).catch(report);
-    const template = [
-      { label: '用系统默认播放器播放（PotPlayer）', click: act(() => external(id)) },
-      ...(settings.playerPath ? [{ label: `用 ${path.basename(settings.playerPath)} 播放`, click: act(() => external(id, true)) }] : []),
-      { label: '选择其他播放器…', click: act(async () => { if (await selectPlayer()) await external(id, true); }) },
+    return [
+      { id: 'external', label: '用系统默认播放器播放', icon: 'external' },
+      ...(settings.playerPath ? [{ id: 'custom', label: `用 ${path.basename(settings.playerPath)} 播放`, icon: 'play' }] : []),
+      { id: 'select-player', label: '选择其他播放器…', icon: 'more' },
       { type: 'separator' },
-      { label: video.favorite ? '取消收藏' : '加入收藏', click: act(() => library.update(id, { favorite: !video.favorite })) },
-      { label: '编辑标签', click: () => send('player-action', { action: 'tags', id }) },
-      { label: '打开所在文件夹', click: act(async () => shell.showItemInFolder(await library.verifiedPath(id))) },
-      { label: '复制文件路径', click: () => clipboard.writeText(video.path) },
-      { label: '重试失败的封面 / 预览', enabled: !library.playing, click: act(async () => { await media.retry(id); send('media-retry', id); }) }
+      { id: 'favorite', label: video.favorite ? '取消收藏' : '加入收藏', icon: 'heart' },
+      { id: 'watched', label: video.watched ? '标记为未看' : '标记为已看完', icon: 'check' },
+      { id: 'tags', label: '编辑标签', icon: 'tag' },
+      { type: 'separator' },
+      { id: 'reveal', label: '打开所在文件夹', icon: 'folder' },
+      { id: 'copy', label: '复制文件路径', icon: 'copy' },
+      { id: 'retry', label: '重试封面 / 预览', icon: 'refresh', enabled: !library.playing }
     ];
-    if (isTest) return template.filter(item => item.label).map(item => item.label);
-    Menu.buildFromTemplate(template).popup({ window });
   });
+  handle('context-action', async (id, action) => {
+    const video = library.get(id);
+    switch (action) {
+      case 'external': return external(id);
+      case 'custom': return external(id, true);
+      case 'select-player': if (await selectPlayer()) return external(id, true); return;
+      case 'favorite': return library.update(id, { favorite: !video.favorite });
+      case 'watched': await library.update(id, { watched: !video.watched }); await library.flush(); return send('player-action', { action: 'watch-status', id });
+      case 'tags': return send('player-action', { action, id });
+      case 'reveal': return shell.showItemInFolder(await library.verifiedPath(id));
+      case 'copy': return clipboard.writeText(video.path);
+      case 'retry': if (library.playing) throw new Error('请先关闭播放器'); await media.retry(id); return send('media-retry', id);
+      default: throw new Error('无效的菜单操作');
+    }
+  });
+  handle('window-action', action => {
+    switch (action) {
+      case 'minimize': window.minimize(); break;
+      case 'maximize': if (window.isMaximized()) window.unmaximize(); else window.maximize(); break;
+      case 'close': app.quit(); break;
+      default: throw new Error('无效的窗口操作');
+    }
+  });
+  handle('window-state', () => ({ maximized: window.isMaximized(), fullscreen: window.isFullScreen() }));
+  handle('history-info', async () => { const backup = await library.store.readHistory(); return { savedAt: backup.savedAt, videos: backup.state.videos.length }; });
+  handle('restore-history', () => library.restoreHistory());
   handle('fullscreen', value => { if (typeof value !== 'boolean') throw new Error('无效状态'); window.setFullScreen(value); });
   handle('settings', () => ({ ...settings, version: app.getVersion(), cache: media.cache.stats() }));
   handle('save-settings', async changes => {
+    if (!changes || typeof changes !== 'object') throw new Error('无效设置');
     if (typeof changes.autoScan === 'boolean') settings.autoScan = changes.autoScan;
     if ([128, 256, 512, 1024, 2048].includes(changes.cacheLimitMB)) {
-      media.cache.limit = changes.cacheLimitMB * MB; await media.cache.trim(); settings.cacheLimitMB = changes.cacheLimitMB;
+      await media.withCache(async () => { const oldLimit = media.cache.limit; media.cache.limit = changes.cacheLimitMB * MB; try { await media.cache.trim(media.reserved); } catch (error) { media.cache.limit = oldLimit; throw error; } }); settings.cacheLimitMB = changes.cacheLimitMB;
     }
+    if ([1, 2, 4].includes(changes.concurrency)) { settings.concurrency = changes.concurrency; media.setConcurrency(changes.concurrency); }
+    if (['system', 'light', 'dark'].includes(changes.theme)) { settings.theme = changes.theme; nativeTheme.themeSource = changes.theme; }
     await saveSettings(); return { ...settings, cache: media.cache.stats() };
   });
   async function manageCache(action) {
@@ -170,23 +216,33 @@ async function start() {
     try { await action(); } finally { media.setPlaying(false); }
     return media.cache.stats();
   }
-  handle('clear-cache', () => manageCache(() => media.cache.clear()));
+  handle('clear-cache', () => manageCache(async () => { await media.cache.clear(); await media.resetFailures(); }));
+  handle('retry-failures', () => manageCache(() => media.resetFailures()));
   handle('move-cache', async () => {
     const result = await dialog.showOpenDialog(window, { title: '选择缓存位置（自动建立 ShiyingCache 子文件夹）', properties: ['openDirectory'] });
     if (result.canceled) return media.cache.stats();
     return manageCache(async () => { await media.cache.move(path.join(result.filePaths[0], 'ShiyingCache')); settings.cacheDirectory = media.directory; await saveSettings(); });
   });
   handle('quit-ready', () => { quitReady?.(); });
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-    { label: '显示', submenu: [{ label: '放大', role: 'zoomIn' }, { label: '缩小', role: 'zoomOut' }, { label: '实际大小', role: 'resetZoom' }] }
-  ]));
-  nativeTheme.themeSource = 'light';
+  Menu.setApplicationMenu(null);
+  nativeTheme.themeSource = settings.theme;
   if (process.platform === 'win32') app.setAppUserModelId('io.github.localvideolibrary');
   function createWindow() {
-    window = new BrowserWindow({ width: 1380, height: 900, minWidth: 900, minHeight: 640, autoHideMenuBar: true, backgroundColor: '#eef1f7', title: '拾影 · 本地视频库', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true } });
+    window = new BrowserWindow({ width: 1380, height: 900, minWidth: 900, minHeight: 640, frame: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#171d2a' : '#eef1f7', title: '拾影 · 本地视频库', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
+    // A destroyed/reloaded renderer can no longer send playing(false).
+    const releasePlayback = () => { media.setPlaying(false); media.cancelQueued(); library.flush().catch(report); };
+    window.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace) releasePlayback(); });
+    window.webContents.on('render-process-gone', (_event, details) => {
+      releasePlayback();
+      if (!quitting && details.reason !== 'clean-exit') dialog.showMessageBox(window, { type: 'error', message: '界面意外退出，视频库已保留', buttons: ['重新打开界面', '退出'] }).then(result => { if (result.response === 0) window.reload(); else app.quit(); });
+    });
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || !(input.control || input.meta)) return;
+      if (['+', '=', '-', '0'].includes(input.key)) { event.preventDefault(); const wc = window.webContents; wc.setZoomLevel(input.key === '0' ? 0 : Math.max(-2, Math.min(4, wc.getZoomLevel() + (input.key === '-' ? -0.5 : 0.5)))); }
+    });
+    for (const name of ['maximize', 'unmaximize']) window.on(name, () => send('window-state', { maximized: window.isMaximized() }));
     window.on('leave-full-screen', () => send('fullscreen-changed', false));
     window.on('enter-full-screen', () => send('fullscreen-changed', true));
     window.on('close', event => { if (!quitting) { event.preventDefault(); app.quit(); } });

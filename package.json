@@ -1,6 +1,6 @@
 {
   "name": "local-video-library",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "拾影 — 本地视频整理器，面向 Windows 10/11",
   "main": "electron/main.cjs",
   "author": "Local Video Library contributors",

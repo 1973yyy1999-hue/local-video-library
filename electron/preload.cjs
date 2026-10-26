@@ -6,9 +6,11 @@ contextBridge.exposeInMainWorld('libraryAPI', {
   update: invoke('update'), reveal: invoke('reveal'), openExternal: invoke('open-external'),
   prepare: invoke('prepare'), cancelMedia: invoke('cancel-media'), playing: invoke('playing'),
   contextMenu: invoke('context-menu'), fullscreen: invoke('fullscreen'), flush: invoke('flush'),
+  contextAction: invoke('context-action'), windowAction: invoke('window-action'), windowState: invoke('window-state'),
+  confirmRelocation: invoke('confirm-relocation'), historyInfo: invoke('history-info'), restoreHistory: invoke('restore-history'), retryFailures: invoke('retry-failures'),
   settings: invoke('settings'), saveSettings: invoke('save-settings'), clearCache: invoke('clear-cache'), moveCache: invoke('move-cache'), quitReady: invoke('quit-ready'),
   on: (name, callback) => {
-    if (!['scan-progress', 'scan-batch', 'library-changed', 'video-changed', 'storage-error', 'media-retry', 'player-action', 'prepare-quit', 'fullscreen-changed'].includes(name)) return () => {};
+    if (!['scan-progress', 'scan-batch', 'library-changed', 'video-changed', 'storage-error', 'media-retry', 'player-action', 'prepare-quit', 'fullscreen-changed', 'window-state'].includes(name)) return () => {};
     const listener = (_event, data) => callback(data); ipcRenderer.on(name, listener);
     return () => ipcRenderer.removeListener(name, listener);
   }

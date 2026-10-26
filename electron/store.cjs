@@ -1,5 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { promisify } = require('node:util');
+const gzip = promisify(require('node:zlib').gzip), gunzip = promisify(require('node:zlib').gunzip);
 
 // Snapshot only on structural changes. Routine metadata/progress writes append
 // small, coalesced patches instead of serializing the complete video library.
@@ -86,6 +88,26 @@ class Store {
   async snapshot(getState) {
     await this.flush();
     return this.enqueue(() => this.checkpoint(getState));
+  }
+  async captureHistory(getState, allowEmpty = false) {
+    await this.flush();
+    return this.enqueue(async () => {
+      if (!allowEmpty && !getState().videos.length) return;
+      const payload = await gzip(JSON.stringify({ savedAt: Date.now(), state: getState() }), { level: 1 });
+      // Two bounded, compressed generations; this is separate from crash recovery.
+      if (payload.length > 32 * 1024 * 1024) throw new Error('历史索引备份超过 32 MB，请先精简视频库后重试');
+      const file = `${this.file}.history-1.gz`;
+      await fs.writeFile(`${file}.tmp`, payload);
+      await fs.copyFile(file, `${this.file}.history-2.gz`).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      await fs.rename(`${file}.tmp`, file);
+    });
+  }
+  async readHistory() {
+    let payload;
+    try { payload = JSON.parse(await gunzip(await fs.readFile(`${this.file}.history-1.gz`), { maxOutputLength: 512 * 1024 * 1024 })); }
+    catch (error) { if (error.code === 'ENOENT') throw new Error('尚无历史备份，已有视频库再次扫描前会自动建立'); throw error; }
+    if (payload.state?.version !== 1 || !Array.isArray(payload.state.roots) || !Array.isArray(payload.state.videos)) throw new Error('历史备份格式无效');
+    return payload;
   }
   async checkpoint(getState) {
       const text = JSON.stringify({ ...getState(), journalSequence: this.sequence });
