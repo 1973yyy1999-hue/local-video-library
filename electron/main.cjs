@@ -9,6 +9,7 @@ const { Media } = require('./media.cjs');
 const { Cache, MB } = require('./cache.cjs');
 const { parseRange } = require('./range.cjs');
 const { randomUUID } = require('node:crypto');
+const { Settings, sorts } = require('./settings.cjs');
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: 'media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
@@ -16,6 +17,7 @@ protocol.registerSchemesAsPrivileged([
 // Avoid a second unbounded browser disk cache beside the explicitly capped media cache.
 app.commandLine.appendSwitch('disable-http-cache');
 let window, library, media, settings, scanPromise, quitting = false, quitReady;
+let settingsStore;
 let relocation;
 const isTest = !app.isPackaged && process.env.LVL_E2E === '1';
 if (isTest && process.env.LVL_DATA) app.setPath('userData', process.env.LVL_DATA);
@@ -41,8 +43,7 @@ function handle(name, callback) {
   });
 }
 async function saveSettings() {
-  const file = path.join(library.directory, 'settings.json');
-  await fs.writeFile(`${file}.tmp`, JSON.stringify(settings)); await fs.rename(`${file}.tmp`, file);
+  await settingsStore.write(settings);
 }
 function scan() {
   if (library.scanning) return;
@@ -72,11 +73,8 @@ async function start() {
     for (const file of [library.file, library.store.journal]) await fs.rename(file, `${file}.damaged-${Date.now()}`).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await library.load();
   }
-  settings = { cacheLimitMB: 512, autoScan: false, playerPath: '', concurrency: 1, theme: 'system' };
-  try { Object.assign(settings, JSON.parse(await fs.readFile(path.join(library.directory, 'settings.json'), 'utf8'))); } catch {}
-  if (![128, 256, 512, 1024, 2048].includes(settings.cacheLimitMB)) settings.cacheLimitMB = 512;
-  if (![1, 2, 4].includes(settings.concurrency)) settings.concurrency = 1;
-  if (!['system', 'light', 'dark'].includes(settings.theme)) settings.theme = 'system';
+  settingsStore = new Settings(library.directory);
+  settings = await settingsStore.read();
   const defaultCache = process.platform === 'win32' && !isTest ? path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'LocalVideoLibrary', 'MediaCache') : path.join(library.directory, 'cache');
   settings.cacheDirectory = typeof settings.cacheDirectory === 'string' ? settings.cacheDirectory : defaultCache;
   media = new Media(library, { directory: settings.cacheDirectory, limitMB: settings.cacheLimitMB, concurrency: settings.concurrency });
@@ -151,7 +149,7 @@ async function start() {
       return { duration: video.duration, width: video.width, height: video.height, url: `media://${kind}/${id}?v=${video.fingerprint}` };
     } catch (error) {
       const failure = library.get(id).mediaFailures?.[kind];
-      return { error: error.message, cancelled: !!error.cancelled, retryAt: failure?.retryAt || 0, permanent: !!failure?.permanent };
+      return { error: failure?.message || error.message, cancelled: !!error.cancelled, retryAt: failure?.retryAt || 0, permanent: !!failure?.permanent, manualRetry: !!failure?.manualRetry || failure?.attempts >= 5 };
     }
   });
   handle('reveal', async id => shell.showItemInFolder(await library.verifiedPath(id)));
@@ -202,7 +200,9 @@ async function start() {
   handle('settings', () => ({ ...settings, version: app.getVersion(), cache: media.cache.stats() }));
   handle('save-settings', async changes => {
     if (!changes || typeof changes !== 'object') throw new Error('无效设置');
-    if (typeof changes.autoScan === 'boolean') settings.autoScan = changes.autoScan;
+    for (const key of ['autoScan', 'hoverPreview', 'muted', 'sidebarCollapsed', 'uiMigrated']) if (typeof changes[key] === 'boolean') settings[key] = changes[key];
+    if (sorts.includes(changes.sort)) settings.sort = changes.sort;
+    if (Number.isFinite(changes.volume) && changes.volume >= 0 && changes.volume <= 1) settings.volume = changes.volume;
     if ([128, 256, 512, 1024, 2048].includes(changes.cacheLimitMB)) {
       await media.withCache(async () => { const oldLimit = media.cache.limit; media.cache.limit = changes.cacheLimitMB * MB; try { await media.cache.trim(media.reserved); } catch (error) { media.cache.limit = oldLimit; throw error; } }); settings.cacheLimitMB = changes.cacheLimitMB;
     }
@@ -219,16 +219,16 @@ async function start() {
   handle('clear-cache', () => manageCache(async () => { await media.cache.clear(); await media.resetFailures(); }));
   handle('retry-failures', () => manageCache(() => media.resetFailures()));
   handle('move-cache', async () => {
-    const result = await dialog.showOpenDialog(window, { title: '选择缓存位置（自动建立 ShiyingCache 子文件夹）', properties: ['openDirectory'] });
+    const result = await dialog.showOpenDialog(window, { title: '选择缓存位置（自动建立 YingkuCache 子文件夹）', properties: ['openDirectory'] });
     if (result.canceled) return media.cache.stats();
-    return manageCache(async () => { await media.cache.move(path.join(result.filePaths[0], 'ShiyingCache')); settings.cacheDirectory = media.directory; await saveSettings(); });
+    return manageCache(async () => { await media.cache.move(path.join(result.filePaths[0], 'YingkuCache')); settings.cacheDirectory = media.directory; await saveSettings(); });
   });
   handle('quit-ready', () => { quitReady?.(); });
   Menu.setApplicationMenu(null);
   nativeTheme.themeSource = settings.theme;
   if (process.platform === 'win32') app.setAppUserModelId('io.github.localvideolibrary');
   function createWindow() {
-    window = new BrowserWindow({ width: 1380, height: 900, minWidth: 900, minHeight: 640, frame: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#171d2a' : '#eef1f7', title: '拾影 · 本地视频库', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true } });
+    window = new BrowserWindow({ width: 1380, height: 900, minWidth: 900, minHeight: 640, frame: false, icon: path.join(__dirname, '../src/icon.png'), backgroundColor: nativeTheme.shouldUseDarkColors ? '#171d2a' : '#eef1f7', title: '影库', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
     // A destroyed/reloaded renderer can no longer send playing(false).
@@ -267,6 +267,8 @@ app.on('before-quit', event => {
     library.cancelled = true; media?.stop();
     await Promise.race([scanPromise, new Promise(resolve => setTimeout(resolve, 1500))]);
     await library.flush();
+    await settingsStore?.queue;
+    await media?.withCache(() => media.cache.flushTouches());
     app.quit();
   })().catch(error => { quitting = false; dialog.showErrorBox('保存未完成', `程序尚未退出，请检查数据盘空间后重试。${error.message}`); });
 });

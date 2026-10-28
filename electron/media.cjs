@@ -73,7 +73,7 @@ class Media {
     if (await this.cache.hit(target)) return target;
     if (video.online === false) throw new Error('文件离线');
     const failure = video.mediaFailures?.[kind];
-    if (!retry && failure?.fingerprint === video.fingerprint && (failure.permanent || failure.retryAt > Date.now())) throw new Error(failure.message);
+    if (!retry && failure?.fingerprint === video.fingerprint && (failure.permanent || failure.manualRetry || failure.attempts >= 5 || failure.retryAt > Date.now())) throw new Error(failure.message);
     if (this.paused) throw Object.assign(new Error('正在播放，后台预览已暂停'), { cancelled: true });
     return this.enqueue(`${video.fingerprint}:${kind}`, async () => {
       const temp = target.replace(/\.(jpg|mp4)$/, '.tmp.$1');
@@ -102,8 +102,10 @@ class Media {
         await fs.unlink(temp).catch(() => {});
         if (!error.cancelled && !this.paused && epoch === this.epoch) {
           const attempts = failure?.fingerprint === video.fingerprint ? (failure.attempts || 0) + 1 : 1;
-          const retryAt = error.permanent ? 0 : Date.now() + Math.min(300000, 30000 * 2 ** Math.min(attempts - 1, 4));
-          this.library.patch(id, { mediaFailures: { ...video.mediaFailures, [kind]: { fingerprint: video.fingerprint, message: error.message, permanent: !!error.permanent, retryAt, attempts } } });
+          const manualRetry = attempts >= 5;
+          const retryAt = error.permanent || manualRetry ? 0 : Date.now() + Math.min(300000, 30000 * 2 ** Math.min(attempts - 1, 4));
+          const message = manualRetry ? '已暂停自动重试，请检查文件后手动重试' : error.message;
+          this.library.patch(id, { mediaFailures: { ...video.mediaFailures, [kind]: { fingerprint: video.fingerprint, message, permanent: !!error.permanent, manualRetry, retryAt, attempts } } });
         }
         throw error;
       } finally { if (reserved) await this.withCache(() => { this.reserved -= 20 * MB; }); }

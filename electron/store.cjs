@@ -2,6 +2,10 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const gzip = promisify(require('node:zlib').gzip), gunzip = promisify(require('node:zlib').gunzip);
+async function durableWrite(file, text, flags = 'w') {
+  const handle = await fs.open(file, flags);
+  try { await handle.writeFile(text, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+}
 
 // Snapshot only on structural changes. Routine metadata/progress writes append
 // small, coalesced patches instead of serializing the complete video library.
@@ -76,7 +80,7 @@ class Store {
     return this.enqueue(async () => {
       try {
         const line = `${JSON.stringify({ sequence: ++this.sequence, updates: batch })}\n`;
-        await fs.appendFile(this.journal, line, 'utf8'); this.journalBytes += Buffer.byteLength(line);
+        await durableWrite(this.journal, line, 'a'); this.journalBytes += Buffer.byteLength(line);
         if (this.journalBytes >= 8 * 1024 * 1024 && this.getState) await this.checkpoint(this.getState);
       }
       catch (error) {
@@ -112,12 +116,12 @@ class Store {
   async checkpoint(getState) {
       const text = JSON.stringify({ ...getState(), journalSequence: this.sequence });
       const temp = `${this.file}.tmp`;
-      await fs.writeFile(temp, text, 'utf8');
-      await fs.writeFile(`${this.file}.bak.tmp`, text, 'utf8');
+      await durableWrite(temp, text);
+      await durableWrite(`${this.file}.bak.tmp`, text);
       await fs.rename(temp, this.file);
       await fs.rename(`${this.file}.bak.tmp`, `${this.file}.bak`);
       // Sequence numbers make recovery safe even if a crash occurs before truncation.
-      await fs.writeFile(this.journal, '', 'utf8'); this.journalBytes = 0;
+      await durableWrite(this.journal, ''); this.journalBytes = 0;
   }
 }
 module.exports = { Store };

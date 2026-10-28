@@ -41,8 +41,9 @@ test('changed file invalidates thumbnail identity, deletion removes only missing
   await fs.unlink(other.path);
   await library.scan();
   assert.equal(library.state.videos.length, 1);
-  assert.notEqual(library.get(video.id).fingerprint, oldFingerprint);
-  assert.equal(library.get(video.id).duration, undefined);
+  assert.notEqual(library.state.videos[0].fingerprint, oldFingerprint);
+  assert.notEqual(library.state.videos[0].id, video.id);
+  assert.equal(library.state.videos[0].duration, undefined);
 });
 test('offline drive preserves records and favorites; reconnection restores availability', async t => {
   const { library, root } = await fixture(t); await library.scan();
@@ -174,9 +175,61 @@ test('pre-scan history survives an empty completed scan and can restore user rec
   const { library } = await fixture(t); await library.scan();
   const id = library.state.videos[0].id; await library.update(id, { favorite: true, watched: true, position: 50 });
   for (const video of library.state.videos) await fs.unlink(video.path);
-  await library.scan(); assert.equal(library.state.videos.length, 0);
+  await library.scan(); assert.equal(library.state.videos.length, 1); assert.equal(library.get(id).online, false);
   const history = await library.store.readHistory(); assert.equal(history.state.videos.length, 2);
   await library.restoreHistory(); assert.equal(library.get(id).favorite, true); assert.equal(library.get(id).watched, true); assert.equal(library.get(id).position, 50);
   await library.scan(); await library.scan();
   const files = await fs.readdir(library.directory); assert.equal(files.filter(file => /history-\d+\.gz$/.test(file)).length, 2);
+});
+
+test('rename and cross-folder moves preserve identity, metadata and cached assets after reopening', async t => {
+  const { library, root } = await fixture(t); await library.scan();
+  const video = library.state.videos.find(item => item.name === '海边 日落');
+  const { id, fingerprint } = video;
+  await library.update(id, { favorite: true, tags: ['收藏'], position: 42, watched: true });
+  const destination = path.join(root, 'B'); await fs.mkdir(destination);
+  const renamed = path.join(destination, '改名后的影片.MP4'); await fs.rename(video.path, renamed);
+  const reopened = new Library(library.directory); await reopened.load(); await reopened.scan();
+  const moved = reopened.get(id);
+  assert.equal(moved.path, await fs.realpath(renamed)); assert.equal(moved.favorite, true); assert.deepEqual(moved.tags, ['收藏']);
+  assert.equal(moved.position, 42); assert.equal(moved.watched, true); assert.equal(moved.fingerprint, fingerprint);
+  assert.equal(reopened.state.videos.length, 2);
+  await reopened.scan(); assert.equal(reopened.state.videos.length, 2);
+});
+test('copied files and ambiguous content never steal metadata from the original', async t => {
+  const { library, root } = await fixture(t); await library.scan();
+  const video = library.state.videos[0]; await library.update(video.id, { favorite: true });
+  const duplicate = path.join(root, `copy.${video.extension}`); await fs.copyFile(video.path, duplicate);
+  await library.scan(); assert.equal(library.get(video.id).path, video.path);
+  const canonical = await fs.realpath(duplicate); const copy = library.state.videos.find(item => item.path === canonical); assert.equal(copy.favorite, false);
+  await fs.rename(video.path, `${video.path}.old`);
+  await fs.rename(duplicate, path.join(root, `moved.${video.extension}`));
+  await library.scan(); assert.equal(library.get(video.id).online, false); assert.equal(library.get(video.id).favorite, true);
+  assert.equal(library.state.videos.find(item => item.online).favorite, false);
+});
+test('unmatched annotated records survive and reconnect on a later scan', async t => {
+  const { library, root, temp } = await fixture(t); await library.scan(); const video = library.state.videos[0];
+  await library.update(video.id, { tags: ['keep'], position: 12 });
+  const outside = path.join(temp, 'parked'); await fs.rename(video.path, outside);
+  await library.scan(); assert.equal(library.get(video.id).online, false);
+  const destination = path.join(root, `back.${video.extension}`); await fs.rename(outside, destination);
+  await library.scan(); assert.equal(library.get(video.id).path, await fs.realpath(destination)); assert.equal(library.get(video.id).position, 12);
+});
+test('legacy records without a fingerprint are retained but never guessed by size', async t => {
+  const { library, root } = await fixture(t); await library.scan(); const video = library.state.videos[0];
+  delete video.contentKey; await library.update(video.id, { favorite: true }); await library.save();
+  await fs.rename(video.path, path.join(root, `legacy-moved.${video.extension}`));
+  await library.scan(); assert.equal(library.get(video.id).online, false); assert.equal(library.get(video.id).favorite, true);
+});
+test('TypeScript and ambiguous transport-stream extensions are not indexed or opened', async t => {
+  const { library, root } = await fixture(t);
+  for (const name of ['index.ts', 'module.mts', 'camera.m2ts']) await fs.writeFile(path.join(root, name), 'export const x = 1;');
+  await library.scan(); assert.equal(library.state.videos.length, 2);
+  const video = library.state.videos[0]; video.path = path.join(root, 'index.ts');
+  await assert.rejects(library.verifiedPath(video.id), /不在已添加/);
+});
+test('relocation rejects equal-size files with a different sampled fingerprint', async t => {
+  const { library, temp } = await fixture(t); await library.scan(); const wrong = path.join(temp, 'wrong-same-size'); await fs.mkdir(wrong);
+  await fs.writeFile(path.join(wrong, '教程.mkv'), 'xxxxxx');
+  await assert.rejects(library.inspectRelocation(library.state.roots[0].id, wrong), /内容不匹配/);
 });

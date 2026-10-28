@@ -1,7 +1,7 @@
 {
   "name": "local-video-library",
-  "version": "0.3.0",
-  "description": "拾影 — 本地视频整理器，面向 Windows 10/11",
+  "version": "1.1.0",
+  "description": "影库 — Windows 本地视频整理器",
   "main": "electron/main.cjs",
   "author": "Local Video Library contributors",
   "license": "MIT",
@@ -10,7 +10,7 @@
     "start": "electron .",
     "test": "node --test test/*.test.cjs",
     "test:e2e": "playwright test",
-    "dist:win": "electron-builder --win zip nsis --x64 --publish never"
+    "dist:win": "node scripts/prepare-notices.cjs && electron-builder --win zip --x64 --publish never"
   },
   "dependencies": {
     "ffmpeg-static": "5.3.0",
@@ -24,7 +24,7 @@
   },
   "build": {
     "appId": "io.github.localvideolibrary",
-    "productName": "Local Video Library",
+    "productName": "影库",
     "directories": {
       "output": "dist"
     },
@@ -44,17 +44,20 @@
     ],
     "win": {
       "target": [
-        "zip",
-        "nsis"
+        "zip"
       ],
-      "artifactName": "LocalVideoLibrary-${version}-win-${arch}.${ext}",
-      "signAndEditExecutable": false
+      "artifactName": "Yingku-${version}-Windows-${arch}.${ext}",
+      "signAndEditExecutable": true,
+      "icon": "build/icon.ico"
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "deleteAppDataOnUninstall": false
-    }
+    "extraResources": [
+      {
+        "from": "third-party",
+        "to": "third-party"
+      }
+    ]
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

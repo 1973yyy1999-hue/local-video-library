@@ -1,4 +1,4 @@
-name: Windows build
+name: Windows portable build
 
 on:
   push:
@@ -25,15 +25,13 @@ jobs:
         run: npm test
       - name: Desktop integration tests
         run: npm run test:e2e
-      - name: Build Windows x64 portable ZIP and installer
+      - name: Build Windows x64 portable ZIP
         run: npm run dist:win
       - name: Upload Windows downloads
         uses: actions/upload-artifact@v4
         with:
-          name: LocalVideoLibrary-Windows-x64
-          path: |
-            dist/*.zip
-            dist/*.exe
+          name: Yingku-Windows-x64-Portable
+          path: dist/*.zip
           retention-days: 30
           if-no-files-found: error
       - name: Upload test screenshots and diagnostics
@@ -51,13 +49,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: LocalVideoLibrary-Windows-x64
+          name: Yingku-Windows-x64-Portable
           path: release
       - name: Publish tagged release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" release/* --title "拾影 $RELEASE_TAG" --generate-notes
+        run: gh release create "$RELEASE_TAG" release/* --title "影库 $RELEASE_TAG" --notes-file docs/releases/v1.1.0.md

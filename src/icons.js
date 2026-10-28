@@ -1,4 +1,5 @@
 const paths = {
+  sidebar: ['M3 4h18v16H3z', 'M9 4v16'],
   minus: ['M5 12h14'], maximize: ['M5 5h14v14H5z'], restore: ['M8 4h12v12M4 8h12v12H4z'],
   check: ['m5 12 4 4L19 6'], tag: ['M3 3h8l10 10-8 8L3 11Z', 'M7 7h.01'], copy: ['M8 8h12v13H8z', 'M4 16H2V2h13v2'],
   play: ['m9 5 11 7-11 7z'], library: ['M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'],

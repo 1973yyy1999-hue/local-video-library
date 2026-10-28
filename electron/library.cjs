@@ -2,8 +2,9 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Store } = require('./store.cjs');
+const { contentKey, uniqueMoves } = require('./identity.cjs');
 
-const EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.wmv', '.flv', '.ts', '.mts', '.m2ts', '.mpg', '.mpeg', '.ogv', '.3gp']);
+const EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.wmv', '.flv', '.mpg', '.mpeg', '.ogv', '.3gp']);
 const idFor = value => crypto.createHash('sha256').update(value).digest('hex').slice(0, 32);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
 
@@ -28,19 +29,25 @@ class Library {
     this.recovery = recovery;
     this.state.roots = data.roots.filter(root => typeof root?.id === 'string' && typeof root.path === 'string' && typeof root.name === 'string');
     const invalid = [];
+    const excluded = new Map((data.excludedVideos || []).map(video => [video.id, video]));
     this.state.videos = data.videos.filter(video => {
       const valid = video && /^[a-f0-9]{32}$/.test(video.id) && typeof video.path === 'string' && typeof video.name === 'string' && typeof video.extension === 'string' && typeof video.fingerprint === 'string' && Number.isFinite(video.size);
       if (!valid) invalid.push(video);
       else { video.tags = Array.isArray(video.tags) ? video.tags.filter(tag => typeof tag === 'string') : []; video.folder = typeof video.folder === 'string' ? video.folder : ''; }
+      if (valid && !EXTENSIONS.has(`.${video.extension.toLowerCase()}`)) { excluded.set(video.id, video); return false; }
       return valid;
     });
+    this.state.excludedVideos = [...excluded.values()];
     if (invalid.length) {
       await fs.writeFile(path.join(this.directory, `invalid-records-${Date.now()}.json`), JSON.stringify(invalid));
       this.recovery += ` 已隔离 ${invalid.length} 条无效记录。`;
     }
     this.reindex();
   }
-  reindex() { this.byId = new Map(this.state.videos.map(video => [video.id, video])); this.byPath = new Map(this.state.videos.map(video => [video.path, video])); }
+  reindex() {
+    this.byId = new Map(this.state.videos.map(video => [video.id, video])); this.byPath = new Map();
+    for (const video of this.state.videos) if (!this.byPath.has(video.path) || video.online !== false) this.byPath.set(video.path, video);
+  }
   save() { return this.store.snapshot(() => this.state); }
   flush() { return this.store.flush(); }
   patch(id, changes, notify = true) {
@@ -81,7 +88,11 @@ class Library {
     for (const video of this.state.videos.filter(item => item.rootId === id)) {
       const next = path.join(full, path.relative(root.path, video.path));
       let online = false;
-      try { const stat = await fs.stat(next); if (!stat.isFile() || stat.size !== video.size) throw new Error('文件大小不一致'); online = true; } catch (error) { if (error.code !== 'ENOENT') throw new Error('新文件夹内容不匹配，请选择原文件夹的新位置'); }
+      try {
+        const stat = await fs.stat(next);
+        if (!stat.isFile() || stat.size !== video.size || video.contentKey && await contentKey(next, stat) !== video.contentKey) throw new Error('文件内容不一致');
+        online = true;
+      } catch (error) { if (error.code !== 'ENOENT') throw new Error('新文件夹内容不匹配，请选择原文件夹的新位置'); }
       updates.push({ video, next, online });
     }
     const matched = updates.filter(item => item.online).length;
@@ -111,9 +122,10 @@ class Library {
     if (this.scanning) return;
     this.scanning = true;
     this.cancelled = false;
+    this.scanEdits = new Map();
     this.status = { running: true, count: 0, message: '正在扫描文件夹…', errors: [] };
     this.progress(this.status.message);
-    const old = new Map(this.byId);
+    const old = new Map([...this.byId].map(([id, video]) => [id, { ...video, tags: [...video.tags] }]));
     const changedBatch = [];
     const publish = () => { if (changedBatch.length) this.notify('scan-batch', changedBatch.splice(0)); };
     const found = new Map();
@@ -145,12 +157,20 @@ class Library {
             if (!entry.isFile() || !EXTENSIONS.has(path.extname(full).toLowerCase())) continue;
             try {
               const stat = await fs.stat(full);
-              const previous = this.byPath.get(full);
-              const id = previous?.id || idFor(full);
+              const atPath = this.byPath.get(full);
+              const unchanged = atPath && atPath.size === stat.size && atPath.modified === stat.mtimeMs;
+              let key = unchanged ? atPath.contentKey : undefined;
+              if (!key) {
+                try { key = await contentKey(full, stat); }
+                catch { if (this.status.errors.length < 20) this.status.errors.push(`暂未建立内容指纹：${full}`); }
+              }
+              // A different file reusing an old filename must not inherit its user data.
+              const previous = atPath && (!atPath.contentKey || atPath.contentKey === key || unchanged) ? atPath : undefined;
+              const id = previous?.id || crypto.randomBytes(16).toString('hex');
               if (found.has(id)) continue;
               const fingerprint = previous && previous.size === stat.size && previous.modified === stat.mtimeMs ? previous.fingerprint : idFor(`${full}|${stat.size}|${stat.mtimeMs}`);
               const entry = {
-                ...previous, id, fingerprint, path: full, name: path.basename(full, path.extname(full)),
+                ...previous, id, fingerprint, contentKey: key, path: full, name: path.basename(full, path.extname(full)),
                 folder: path.relative(root.path, folder) || root.name, rootId: root.id,
                 extension: path.extname(full).slice(1).toLowerCase(), size: stat.size, modified: stat.mtimeMs,
                 added: previous?.added || stat.birthtimeMs || stat.mtimeMs, favorite: previous?.favorite || false,
@@ -169,17 +189,28 @@ class Library {
           }
         }
       }
-      // An interrupted scan or disconnected drive must not discard previous entries.
+      // Match only unique signatures after traversal; copies and partial scans are ambiguous.
+      if (!this.cancelled && !incomplete.length) for (const [previous, entry] of uniqueMoves(old, found)) {
+        const provisionalId = entry.id;
+        const edits = { ...this.scanEdits.get(previous.id), ...this.scanEdits.get(provisionalId) };
+        const location = { path: entry.path, folder: entry.folder, rootId: entry.rootId, name: entry.name, extension: entry.extension, modified: entry.modified, online: true };
+        Object.assign(entry, previous, location, edits);
+        this.scanEdits.set(previous.id, { ...this.scanEdits.get(previous.id), ...edits });
+        found.delete(provisionalId); found.set(previous.id, entry);
+      }
+      // Unmatched records stay offline so later moves/reconnections can recover metadata.
       for (const [id, video] of old) {
-        if (!found.has(id) && (this.cancelled || incomplete.some(folder => inside(folder, video.path)))) {
+        const hasUserData = video.favorite || video.tags?.length || video.position || video.watched || video.lastPlayed;
+        if (!found.has(id) && (hasUserData || this.cancelled || incomplete.some(folder => inside(folder, video.path)))) {
           found.set(id, { ...video, online: this.cancelled ? video.online : false });
         }
       }
       // Preserve edits made while asynchronous traversal was in progress.
       for (const video of found.values()) {
-        const latest = old.get(video.id);
+        const latest = this.byId.get(video.id) || old.get(video.id);
         if (!latest) continue;
-        for (const field of ['favorite', 'tags', 'position', 'lastPlayed', 'watched']) video[field] = latest[field];
+        const edits = this.scanEdits.get(video.id) || {};
+        for (const field of ['favorite', 'tags', 'position', 'lastPlayed', 'watched']) video[field] = Object.hasOwn(edits, field) ? edits[field] : latest[field];
         if (latest.fingerprint === video.fingerprint) {
           for (const field of ['duration', 'width', 'height']) if (latest[field] !== undefined) video[field] = latest[field];
         }
@@ -188,7 +219,8 @@ class Library {
       this.state.videos = [...found.values()];
       this.reindex();
       await this.save();
-      this.progress(this.cancelled ? '扫描已停止，已有索引已保留' : `扫描完成 · ${found.size} 个视频${incomplete.length ? ' · 部分路径无法读取' : ''}`);
+      const offline = this.state.videos.filter(video => video.online === false).length;
+      this.progress(this.cancelled ? '扫描已停止' : `扫描完成 · ${found.size} 个视频${offline ? ` · ${offline} 个离线` : ''}${incomplete.length ? ' · 部分路径无法读取' : ''}`);
     } finally {
       this.scanning = false;
       this.status.running = false;
@@ -224,6 +256,7 @@ class Library {
     if (Number.isFinite(changes.position) && changes.position >= 0) patch.position = changes.position;
     if (typeof changes.watched === 'boolean') patch.watched = changes.watched;
     if (changes.played === true) patch.lastPlayed = Date.now();
+    if (this.scanning) this.scanEdits.set(id, { ...this.scanEdits.get(id), ...patch });
     const video = this.patch(id, patch);
     // User edits are durable before acknowledging; periodic position writes coalesce.
     if ('favorite' in patch || 'tags' in patch) await this.flush();

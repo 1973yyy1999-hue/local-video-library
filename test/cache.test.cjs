@@ -33,3 +33,18 @@ test('moving a cache leaves no duplicate payloads in the old location', async t 
   assert.equal(cache.total, 5); assert.equal((await fs.readdir(old)).length, 0);
   await cache.trim(0, new Set()); assert.equal(cache.total, 0);
 });
+
+test('recently used cache files remain recent after restarting', async t => {
+  const { cache } = await fixture(t); const first = path.join(cache.directory, name(1)), second = path.join(cache.directory, name(2));
+  await fs.writeFile(first, Buffer.alloc(400000)); await fs.writeFile(second, Buffer.alloc(400000));
+  await fs.utimes(first, new Date(1000), new Date(1000)); await fs.utimes(second, new Date(2000), new Date(2000));
+  await cache.load(); await cache.hit(first);
+  const reopened = new Cache(cache.directory, 1); await reopened.load(); await reopened.trim(500000);
+  assert.equal(reopened.entries.has(first), true); assert.equal(reopened.entries.has(second), false);
+});
+test('previews are evicted before older thumbnails under the same budget', async t => {
+  const { cache } = await fixture(t); const cover = path.join(cache.directory, name(1)), preview = path.join(cache.directory, name(2).replace('-thumb.jpg', '-preview.mp4'));
+  await fs.writeFile(cover, Buffer.alloc(400000)); await fs.writeFile(preview, Buffer.alloc(400000));
+  await fs.utimes(cover, new Date(1000), new Date(1000)); await cache.load(); await cache.trim(500000);
+  assert.equal(cache.entries.has(cover), true); assert.equal(cache.entries.has(preview), false);
+});

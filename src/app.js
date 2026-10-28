@@ -11,6 +11,7 @@ let view = 'all', rootId = '', kind = 'all', tagFilter = '', page = 1, current =
 let observer, generation = 0, preview = null, previewTimer, queryTimer, toastTimer, batchTimer;
 let lastPositionSave = 0, nativeFullscreen = false, closing = false;
 const PAGE_SIZE = 60;
+let preferencesReady = false, volumeTimer;
 let preferences = { concurrency: 1, theme: 'system' }, thumbnails, retryTimer, pendingAction, watchedOverride = false;
 decorate();
 function toast(message) { clearTimeout(toastTimer); $('#toast').textContent = message; $('#toast').hidden = false; toastTimer = setTimeout(() => $('#toast').hidden = true, 5000); }
@@ -25,6 +26,7 @@ function status(value) {
   document.querySelectorAll('.root-remove,.root-relocate').forEach(button => button.disabled = !!value.running);
 }
 async function refresh() {
+  clearTimeout(batchTimer); batchTimer = null;
   const fresh = await api.snapshot();
   // Preserve object identity for card handlers and an open player.
   for (const item of fresh.videos) if (byId.has(item.id)) Object.assign(byId.get(item.id), item); else byId.set(item.id, item);
@@ -37,16 +39,16 @@ function counts() {
 function renderSidebar() {
   counts(); $('#root-count').textContent = state.roots.length;
   const container = $('#roots'); container.replaceChildren();
-  if (!state.roots.length) container.append(element('p', 'root-note', '添加文件夹后，在这里切换视频来源。'));
+
   for (const root of state.roots) {
     const row = element('div', `root-row ${rootId === root.id ? 'active' : ''}`);
     const button = element('button', 'root-label', root.name); button.prepend(icon(root.online ? 'folder' : 'disk'));
-    button.title = `${root.path}${root.online ? '' : '（离线）'}`;
+    button.setAttribute('aria-label', root.name); button.title = `${root.path}${root.online ? '' : '（离线）'}`;
     button.onclick = () => { rootId = root.id; view = 'all'; page = 1; renderSidebar(); render(); };
     const relocate = element('button', 'root-relocate'); relocate.append(icon('more')); relocate.setAttribute('aria-label', `重新定位 ${root.name}`); relocate.title = '盘符变了？重新定位文件夹';
     relocate.onclick = () => safe(async () => {
       const match = await api.relocateFolder(root.id); if (!match) return;
-      confirmAction('确认重新定位文件夹', `匹配 ${match.matched} / ${match.total} 个视频。${match.total - match.matched} 个未匹配的视频会保留为离线。将使用新位置：${match.path}。匹配依据为相对路径和文件大小。`, () => api.confirmRelocation(match.token));
+      confirmAction('确认重新定位文件夹', `匹配 ${match.matched} / ${match.total} 个视频。${match.total - match.matched} 个未匹配的视频会保留为离线。将使用新位置：${match.path}。`, () => api.confirmRelocation(match.token));
     });
     const remove = element('button', 'root-remove'); remove.append(icon('close')); remove.title = '从视频库移除'; remove.setAttribute('aria-label', `移除文件夹 ${root.name}`);
     remove.disabled = relocate.disabled = !!state.status.running;
@@ -81,6 +83,11 @@ function startPreview(item, target) {
 }
 function patchCard(item, card = document.querySelector(`.card[data-id="${item.id}"]`)) {
   if (!card) return;
+  if (card.dataset.fingerprint && card.dataset.fingerprint !== item.fingerprint) card.querySelector('img')?.remove();
+  card.dataset.fingerprint = item.fingerprint;
+  const title = card.querySelector('.card-title'); title.textContent = title.title = item.name;
+  card.querySelector('.card-meta').textContent = `${item.folder} · ${size(item.size)}`;
+  card.querySelector('.thumbnail').setAttribute('aria-label', `播放 ${item.name}`);
   const favorite = card.querySelector('.favorite-button'); favorite.classList.toggle('is-favorite', !!item.favorite);
   favorite.title = item.favorite ? '取消收藏' : '收藏'; favorite.setAttribute('aria-label', `${favorite.title} ${item.name}`);
   card.querySelector('.duration').textContent = item.online === false ? '文件离线' : duration(item.duration);
@@ -122,7 +129,7 @@ function render() {
   $('#heading').textContent = query ? '搜索结果' : scopeName;
   $('#scope-label').textContent = `搜索范围：${scopeName}${tagFilter ? ` · 标签 ${tagFilter}` : ''}${kind !== 'all' ? ` · ${kind.toUpperCase()}` : ''}`;
   $('#search-all').hidden = !rootId && view === 'all' && !tagFilter && kind === 'all';
-  $('#summary').textContent = state.roots.length ? `${items.length.toLocaleString()} 个视频 · ${state.roots.length} 个来源文件夹${state.status.running ? ' · 扫描中，结束后补充封面' : ' · 只属于你的收藏'}` : '把硬盘里的视频，变成自己的影库。';
+  $('#summary').textContent = state.roots.length ? `${items.length.toLocaleString()} 个视频 · ${state.roots.length} 个来源文件夹${state.status.running ? ' · 扫描中，结束后补充封面' : ''}` : '';
   $('#empty').hidden = state.roots.length > 0; $('#no-results').hidden = !state.roots.length || items.length > 0 || state.status.running;
   $('#empty-title').textContent = query || kind !== 'all' || tagFilter ? '没有找到匹配的视频' : view === 'favorite' ? '还没有收藏的视频' : view === 'recent' ? '还没有播放记录' : '这个文件夹里还没有视频';
   $('#empty-description').textContent = view === 'favorite' && !query ? '点一下视频旁的爱心，把喜欢的内容收在这里。' : view === 'recent' && !query ? '播放过的视频会出现在这里。' : '可以重新扫描文件夹，或调整搜索条件。';
@@ -137,7 +144,7 @@ function render() {
   };
   const ready = node => {
     const item = byId.get(node.dataset.id), fail = item?.mediaFailures?.thumb;
-    return item && item.online !== false && inViewport(node) && !node.querySelector('img') && !(fail?.fingerprint === item.fingerprint && (fail.permanent || fail.retryAt > Date.now()));
+    return item && item.online !== false && inViewport(node) && !node.querySelector('img') && !(fail?.fingerprint === item.fingerprint && (fail.permanent || fail.manualRetry || fail.attempts >= 5 || fail.retryAt > Date.now()));
   };
   function scheduleRetry() {
     clearTimeout(retryTimer);
@@ -149,7 +156,7 @@ function render() {
     try {
       const result = await api.prepare(item.id, 'thumb');
       if (generation !== batch || !node.isConnected) return;
-      if (result.error) { thumbnailState(node, result.cancelled ? '等待封面' : result.permanent ? '封面不可用 · 右键重试' : '暂时不可用 · 稍后重试', result.error); return; }
+      if (result.error) { thumbnailState(node, result.cancelled ? '等待封面' : result.manualRetry ? '需手动重试' : result.permanent ? '封面不可用 · 右键重试' : '暂时不可用 · 稍后重试', result.error); return; }
       const img = element('img'); img.alt = '';
       img.onload = () => thumbnailState(node, '');
       img.onerror = () => { img.remove(); thumbnailState(node, '封面已失效 · 右键重试', '缓存可能已经被清理，可右键重新生成'); };
@@ -168,7 +175,7 @@ function render() {
   }, { rootMargin: '0px' });
   grid.querySelectorAll('.card').forEach(node => {
     const item = byId.get(node.dataset.id), fail = item.mediaFailures?.thumb;
-    if (!node.querySelector('img')) thumbnailState(node, item.online === false ? '文件离线' : fail?.fingerprint === item.fingerprint ? fail.permanent ? '封面不可用 · 右键重试' : '暂时不可用 · 稍后重试' : '等待封面', fail?.message);
+    if (!node.querySelector('img')) thumbnailState(node, item.online === false ? '文件离线' : fail?.fingerprint === item.fingerprint ? fail.manualRetry || fail.attempts >= 5 ? '需手动重试' : fail.permanent ? '封面不可用 · 右键重试' : '暂时不可用 · 稍后重试' : '等待封面', fail?.message);
     observer.observe(node);
   });
 }
@@ -239,8 +246,7 @@ $('#player').addEventListener('error', () => { if (current && $('#player').getAt
 $('#player').addEventListener('timeupdate', () => { if (Date.now() - lastPositionSave > 15000) { lastPositionSave = Date.now(); safe(() => savePosition()); } });
 $('#player').addEventListener('ended', () => safe(() => savePosition(true)));
 $('#player').addEventListener('pause', () => { if (!closing) safe(() => savePosition(true)); });
-$('#player').addEventListener('volumechange', () => { localStorage.setItem('volume', String($('#player').volume)); localStorage.setItem('muted', String($('#player').muted)); });
-$('#player').volume = Math.max(0, Math.min(1, Number(localStorage.getItem('volume') ?? 1))); $('#player').muted = localStorage.getItem('muted') === 'true';
+$('#player').addEventListener('volumechange', () => { if (!preferencesReady) return; clearTimeout(volumeTimer); volumeTimer = setTimeout(() => safe(saveVolume), 350); });
 $('#player-stage').oncontextmenu = event => { if (current) videoMenu(event, current); };
 $('#close-player').onclick = () => safe(closePlayer);
 $('#fullscreen').onclick = () => safe(toggleFullscreen); $('#exit-fullscreen').onclick = () => safe(exitFullscreen);
@@ -256,8 +262,8 @@ $('#confirm-remove').onclick = () => safe(async () => { await api.removeFolder(r
 document.querySelectorAll('[data-view]').forEach(button => button.onclick = () => { view = button.dataset.view; rootId = ''; page = 1; renderSidebar(); render(); });
 document.querySelectorAll('[data-kind]').forEach(button => button.onclick = () => { kind = button.dataset.kind; page = 1; document.querySelectorAll('[data-kind]').forEach(node => node.classList.toggle('active', node === button)); render(); });
 $('#search').addEventListener('input', () => { clearTimeout(queryTimer); queryTimer = setTimeout(() => { page = 1; render(); }, 180); });
-$('#sort').value = localStorage.getItem('sort') || 'relevance'; $('#sort').onchange = () => { localStorage.setItem('sort', $('#sort').value); page = 1; render(); };
-$('#hover-enabled').checked = localStorage.getItem('hoverPreview') !== 'false'; $('#hover-enabled').onchange = () => { stopPreview(); localStorage.setItem('hoverPreview', String($('#hover-enabled').checked)); };
+$('#sort').onchange = () => { safe(() => persistUi({ sort: $('#sort').value })); page = 1; render(); };
+$('#hover-enabled').onchange = () => { stopPreview(); safe(() => persistUi({ hoverPreview: $('#hover-enabled').checked })); };
 function clearFilters(keepQuery = false) { if (!keepQuery) $('#search').value = ''; rootId = ''; view = 'all'; tagFilter = ''; kind = 'all'; page = 1; document.querySelectorAll('[data-kind]').forEach(button => button.classList.toggle('active', button.dataset.kind === 'all')); renderSidebar(); render(); }
 $('#clear-filters').onclick = () => clearFilters(); $('#search-all').onclick = () => clearFilters(true);
 $('#prev-page').onclick = () => { page--; render(); window.scrollTo(0, 0); }; $('#next-page').onclick = () => { page++; render(); window.scrollTo(0, 0); };
@@ -265,8 +271,16 @@ function applyPreferences(settings) {
   preferences = { ...preferences, ...settings };
   document.documentElement.dataset.theme = settings.theme;
   applyAppearance();
-  $('#task-mode').textContent = settings.concurrency === 1 ? '机械硬盘 · 单任务' : `${settings.concurrency} 个并发任务`;
+  applySidebar();
 }
+function applySidebar() {
+  const collapsed = !!preferences.sidebarCollapsed;
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  const button = $('#sidebar-toggle'); button.setAttribute('aria-expanded', String(!collapsed)); button.title = collapsed ? '展开侧栏' : '收起侧栏'; button.setAttribute('aria-label', button.title);
+}
+async function persistUi(changes) { Object.assign(preferences, changes); await api.saveSettings(changes); }
+async function saveVolume() { clearTimeout(volumeTimer); if (preferencesReady) await persistUi({ volume: $('#player').volume, muted: $('#player').muted }); }
+$('#sidebar-toggle').onclick = () => { preferences.sidebarCollapsed = !preferences.sidebarCollapsed; applySidebar(); safe(() => persistUi({ sidebarCollapsed: preferences.sidebarCollapsed })); };
 function applyAppearance() { document.documentElement.dataset.appearance = preferences.theme === 'dark' || preferences.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance);
 function displaySettings(settings) { applyPreferences(settings); $('#cache-usage').textContent = `已用 ${size(settings.cache.bytes)} / 上限 ${settings.cache.limitMB} MB`; $('#cache-path').textContent = settings.cache.directory; $('#cache-limit').value = settings.cache.limitMB; $('#auto-scan').checked = settings.autoScan; $('#concurrency').value = settings.concurrency; $('#theme').value = settings.theme; }
@@ -289,7 +303,7 @@ document.addEventListener('keydown', event => {
 api.on('scan-progress', status); api.on('library-changed', () => safe(refresh)); api.on('video-changed', applyPatch); api.on('storage-error', toast);
 api.on('scan-batch', batch => {
   for (const item of batch) if (byId.has(item.id)) Object.assign(byId.get(item.id), item); else { byId.set(item.id, item); state.videos.push(item); }
-  if (!batchTimer) batchTimer = setTimeout(() => { batchTimer = null; rebuildSearch(); counts(); render(); }, 500);
+  if (!batchTimer) batchTimer = setTimeout(() => { batchTimer = null; rebuildSearch(); counts(); render(); }, 1500);
 });
 api.on('fullscreen-changed', enabled => { if (!enabled) { nativeFullscreen = false; document.body.classList.remove('native-fullscreen'); } });
 api.on('media-retry', id => { const card = document.querySelector(`.card[data-id="${id}"]`); if (card) { card.querySelector('img')?.remove(); thumbnails?.add(card); } });
@@ -298,9 +312,18 @@ api.on('player-action', value => {
   if (value.action === 'pause' && current?.id === value.id) $('#player').pause();
   if (value.action === 'tags' && byId.has(value.id)) safe(async () => { if (current?.id !== value.id) await openPlayer(byId.get(value.id)); $('#tags-input').focus(); });
 });
-api.on('prepare-quit', () => { safe(async () => { await savePosition(true); await api.quitReady(); }); });
+api.on('prepare-quit', () => { safe(async () => { await savePosition(true); await saveVolume(); await api.quitReady(); }); });
 window.addEventListener('unhandledrejection', event => { event.preventDefault(); failure(event.reason); });
-safe(async () => { const settings = await api.settings(); applyPreferences(settings); await refresh(); $('#version').textContent = `v${settings.version} · 本地存储 · 离线使用`; if (state.recovery) toast(state.recovery); });
+safe(async () => {
+  let settings = await api.settings();
+  if (!settings.uiMigrated) {
+    await api.saveSettings({ hoverPreview: localStorage.getItem('hoverPreview') !== 'false', sort: localStorage.getItem('sort') || 'relevance', volume: Math.max(0, Math.min(1, Number(localStorage.getItem('volume') ?? 1))), muted: localStorage.getItem('muted') === 'true', uiMigrated: true });
+    settings = await api.settings();
+  }
+  applyPreferences(settings); $('#hover-enabled').checked = settings.hoverPreview; $('#sort').value = settings.sort;
+  $('#player').volume = settings.volume; $('#player').muted = settings.muted; preferencesReady = true;
+  await refresh(); $('#version').textContent = `v${settings.version}`; if (state.recovery) toast(state.recovery);
+});
 
 function windowState(value) { const button = $('#window-maximize'); button.replaceChildren(icon(value.maximized ? 'restore' : 'maximize')); button.title = value.maximized ? '还原窗口' : '最大化'; button.setAttribute('aria-label', button.title); }
 for (const action of ['minimize', 'maximize', 'close']) $(`#window-${action}`).onclick = () => safe(() => api.windowAction(action));

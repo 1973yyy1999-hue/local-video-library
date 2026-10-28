@@ -12,7 +12,7 @@ class Cache {
       const file = path.join(this.directory, name);
       const stat = await fs.stat(file);
       if (name.includes('.tmp.') || stat.size === 0) { await fs.unlink(file); continue; }
-      this.entries.set(file, { size: stat.size, touched: stat.mtimeMs }); this.total += stat.size;
+      this.entries.set(file, { size: stat.size, touched: stat.mtimeMs, savedTouch: stat.mtimeMs }); this.total += stat.size;
     }
     await this.trim();
   }
@@ -21,10 +21,15 @@ class Cache {
     if (!entry) return false;
     try { const stat = await fs.stat(file); if (!stat.size) throw new Error('empty'); }
     catch { this.total -= entry.size; this.entries.delete(file); return false; }
-    entry.touched = Date.now(); return true;
+    entry.touched = Date.now();
+    if (entry.touched - (entry.savedTouch || 0) >= 60000) {
+      const touched = entry.touched; entry.savedTouch = touched;
+      try { await fs.utimes(file, new Date(touched), new Date(touched)); } catch { entry.savedTouch = 0; }
+    }
+    return true;
   }
   async trim(reserve = 0, fingerprints) {
-    const ordered = [...this.entries].sort((a, b) => a[1].touched - b[1].touched);
+    const ordered = [...this.entries].sort((a, b) => Number(a[0].endsWith('-thumb.jpg')) - Number(b[0].endsWith('-thumb.jpg')) || a[1].touched - b[1].touched);
     for (const [file, entry] of ordered) {
       const orphan = fingerprints && !fingerprints.has(path.basename(file).slice(0, 32));
       if (!orphan && this.total + reserve <= this.limit) continue;
@@ -40,10 +45,17 @@ class Cache {
     this.entries.set(file, { size: stat.size, touched: Date.now() }); this.total += stat.size;
     await this.trim();
   }
+  async flushTouches() {
+    for (const [file, entry] of this.entries) if (entry.touched > (entry.savedTouch || 0)) {
+      try { await fs.utimes(file, new Date(entry.touched), new Date(entry.touched)); entry.savedTouch = entry.touched; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
   stats() { return { bytes: this.total, limitMB: this.limit / MB, directory: this.directory, files: this.entries.size }; }
   async clear() { for (const file of [...this.entries.keys()]) { try { await fs.unlink(file); } catch (error) { if (error.code !== 'ENOENT') throw new Error('缓存正在使用，请关闭播放器后重试'); } this.total -= this.entries.get(file).size; this.entries.delete(file); } }
   async move(directory) {
     if (path.resolve(directory) === path.resolve(this.directory)) return;
+    await this.flushTouches();
     await fs.mkdir(directory, { recursive: true });
     for (const file of this.entries.keys()) {
       const target = path.join(directory, path.basename(file));

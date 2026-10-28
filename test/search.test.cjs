@@ -17,3 +17,9 @@ test('typo-tolerant search finds misspelled titles', { skip: !Fuse && 'Install d
   assert.equal(searchVideos(records, 'Javscript', Fuse)[0].id, 'b');
   assert.equal(searchVideos(records, '', Fuse).length, 3);
 });
+
+test('direct substring searches do not construct the fuzzy index', () => {
+  class NoFuse { constructor() { assert.fail('Exact matches must not build Fuse'); } }
+  assert.deepEqual(searchVideos(records, 'JAVASCRIPT', NoFuse).map(item => item.id), ['b']);
+  assert.deepEqual(searchVideos(records, '旅行 风景', NoFuse).map(item => item.id), ['a']);
+});

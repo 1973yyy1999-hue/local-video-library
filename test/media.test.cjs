@@ -81,3 +81,15 @@ test('parallel media reservations remain inside cache quota and release on failu
   assert.equal(media.reserved, 80 * 1024 * 1024); assert.ok(media.cache.total + media.reserved <= media.cache.limit);
   release.forEach(done => done()); await Promise.all(jobs); assert.equal(media.reserved, 0);
 });
+
+test('five transient attempts stop automatic retries without declaring the file corrupt', async t => {
+  const { video, media } = await fixture(t); let calls = 0;
+  media.run = async () => { calls++; throw new Error('busy'); };
+  for (let index = 0; index < 5; index++) {
+    if (video.mediaFailures?.thumb) video.mediaFailures.thumb.retryAt = 0;
+    await assert.rejects(media.asset(video.id, 'thumb'));
+  }
+  assert.equal(video.mediaFailures.thumb.permanent, false); assert.equal(video.mediaFailures.thumb.manualRetry, true);
+  await assert.rejects(media.asset(video.id, 'thumb')); assert.equal(calls, 5);
+  await assert.rejects(media.retry(video.id)); assert.equal(calls, 6); assert.equal(video.mediaFailures.thumb.attempts, 1);
+});

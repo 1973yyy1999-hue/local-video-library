@@ -2,9 +2,12 @@
   function createSearcher(videos, FuseClass) {
     // Build once per searchable-data revision, not once per keystroke.
     let index;
+    const prepared = videos.map(item => ({ item, text: `${item.name}\n${item.folder}\n${(item.tags || []).join('\n')}`.toLocaleLowerCase() }));
     return query => {
-      const tokens = query.trim().split(/\s+/).filter(Boolean);
+      const tokens = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
       if (!tokens.length) return videos.slice();
+      const exact = prepared.filter(record => tokens.every(token => record.text.includes(token))).map(record => record.item);
+      if (exact.length) return exact;
       index ||= new FuseClass(videos, { keys: [{ name: 'name', weight: 3 }, { name: 'folder', weight: 1 }, { name: 'tags', weight: 2 }], threshold: 0.35, ignoreLocation: true, includeScore: true, minMatchCharLength: 1 });
       let scores;
       for (const token of tokens) {
