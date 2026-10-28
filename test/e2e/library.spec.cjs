@@ -28,12 +28,12 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
     await page.locator('#sidebar-toggle').click();
     await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
     await expect(page.locator('#add-folder')).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('windows-sidebar-collapsed.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-sidebar-collapsed.png') });
     await page.locator('#sidebar-toggle').click();
     await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
     await expect(page.locator('.thumbnail img')).toBeVisible({ timeout: 60000 });
     await expect.poll(() => page.locator('.thumbnail img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
-    await page.screenshot({ path: testInfo.outputPath('windows-library.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-library.png') });
     await page.locator('#search').fill('Javscript');
     await expect(page.locator('#heading')).toHaveText('搜索结果');
     await expect(page.locator('.card')).toHaveCount(1);
@@ -41,7 +41,7 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
     await expect(page.locator('.thumbnail video')).toBeVisible({ timeout: 60000 });
     await expect.poll(() => page.locator('.thumbnail video').evaluate(video => video.currentTime)).toBeGreaterThan(0);
     await expect.poll(() => page.locator('.card').evaluate(node => getComputedStyle(node).transform)).not.toBe('none');
-    await page.screenshot({ path: testInfo.outputPath('windows-hover.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-hover.png') });
     await page.locator('#heading').hover();
     await expect(page.locator('.thumbnail video')).toHaveCount(0);
     const cover = await page.locator('.thumbnail img').elementHandle();
@@ -53,7 +53,7 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
     await expect.poll(() => page.locator('#player').evaluate(video => video.currentTime)).toBeGreaterThan(0);
     await page.locator('#fullscreen').click();
     await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath('windows-fullscreen.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-fullscreen.png') });
     await page.evaluate(() => document.exitFullscreen());
     await page.locator('#pip').click();
     await expect.poll(() => page.evaluate(() => !!document.pictureInPictureElement)).toBe(true);
@@ -61,7 +61,7 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
     await page.locator('#player').evaluate(video => video.pause());
     await page.locator('#player-stage').click({ button: 'right' });
     await expect(page.getByRole('menuitem', { name: '用系统默认播放器播放', exact: true })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('windows-player-menu.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-player-menu.png') });
     await page.getByRole('menuitem', { name: '标记为已看完', exact: true }).click();
     await expect(page.locator('.watched')).toBeVisible();
     await application.evaluate(({ shell }) => { shell.openPath = async file => { globalThis.__openedFile = file; return ''; }; });
@@ -105,12 +105,12 @@ test('import, thumbnail, typo search, hover playback, tags, resume and persisten
     await page.locator('#concurrency').selectOption('2');
     await page.locator('#save-settings').click();
     await expect(page.locator('#cache-usage')).toContainText('128 MB');
-    await page.screenshot({ path: testInfo.outputPath('windows-settings.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-settings.png') });
     await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark');
     await page.locator('#close-settings').click();
     await page.locator('.card').click({ button: 'right' });
     await expect(page.getByRole('menuitem', { name: '标记为未看', exact: true })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('windows-dark-menu.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-dark-menu.png') });
     await page.keyboard.press('Escape');
     await expect(page.locator('#context-menu')).not.toBeVisible();
     await page.locator('.card-title').click();
@@ -144,7 +144,7 @@ test('failed covers are visible, batch retry recovers a repaired file, relocatio
     const page = await application.firstWindow();
     await page.locator('#add-folder').click();
     await expect(page.locator('.thumbnail-status')).toContainText('封面不可用', { timeout: 60000 });
-    await page.screenshot({ path: testInfo.outputPath('windows-failed-cover.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-failed-cover.png') });
     execFileSync(require('ffmpeg-static'), ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=12', '-t', '5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-threads', '1', source]);
     await page.locator('#open-settings').click();
     await page.locator('#retry-failures').click();
@@ -161,7 +161,7 @@ test('failed covers are visible, batch retry recovers a repaired file, relocatio
     await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, moved);
     await page.locator('.root-relocate').click();
     await expect(page.locator('#action-description')).toContainText('匹配 1 / 1');
-    await page.screenshot({ path: testInfo.outputPath('windows-relocate.png') });
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('windows-relocate.png') });
     await page.locator('#action-cancel').click();
     expect(await page.evaluate(() => window.libraryAPI.snapshot().then(data => data.roots[0].path))).not.toBe(await fs.realpath(moved));
     await page.locator('.root-relocate').click(); await page.locator('#action-confirm').click();
