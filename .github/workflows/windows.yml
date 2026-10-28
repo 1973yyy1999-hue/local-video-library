@@ -27,6 +27,8 @@ jobs:
         run: npm run test:e2e
       - name: Build Windows x64 portable ZIP
         run: npm run dist:win
+      - name: Verify packaged executable and upgrade data location
+        run: node scripts/smoke-packaged.cjs
       - name: Upload Windows downloads
         uses: actions/upload-artifact@v4
         with:
